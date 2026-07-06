@@ -1,0 +1,3 @@
+from beingbeyond_d1_edu_sdk.exo import run_exo_visualizer
+
+run_exo_visualizer()

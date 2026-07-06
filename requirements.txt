@@ -1,0 +1,20 @@
+# Recommended full development/runtime environment for BeingBeyond D1 EDU SDK.
+# Python: 3.10 is recommended. Python 3.11 may work, but 3.10 has the lowest
+# risk for robotics binary wheels such as pin/cvxpy/Cython extensions.
+
+numpy>=1.23,<2.0
+pyserial>=3.5,<4
+python-can>=4.3,<5
+pin>=2.6,<3.0
+cvxpy>=1.4,<1.7
+matplotlib>=3.7,<3.10
+
+# Build the Cython extension modules from source.
+Cython>=3.0,<3.1
+setuptools>=68
+wheel>=0.42
+build>=1.2
+
+# Optional but useful for this repository.
+opencv-python>=4.8,<5
+meshcat>=0.3,<1

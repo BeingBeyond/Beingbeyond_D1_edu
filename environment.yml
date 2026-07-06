@@ -1,0 +1,12 @@
+name: d1_edu
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pip>=23
+  - compilers
+  - make
+  - pkg-config
+  - pip:
+      - -r requirements.txt
