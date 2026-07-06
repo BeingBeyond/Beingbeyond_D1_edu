@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="bb_d1_edu.jpg" width="400" alt="BeingBeyond D1 EDU">
+  <img src="./bb_d1_edu.jpg" width="400" alt="BeingBeyond D1 EDU">
 </p>
 
 # BeingBeyond D1 EDU SDK Examples
