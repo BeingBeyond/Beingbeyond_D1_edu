@@ -29,7 +29,7 @@ def main():
     urdf = get_default_urdf_path()
     dev = "/dev/ttyACM0"
 
-    robot = HeadArmRobot(urdf_path=urdf, dev=dev)
+    robot = HeadArmRobot(urdf_path=urdf, dev=dev, return_delay=0)
     try:
         joint_names = robot.joint_names
         n_joints = len(joint_names)
