@@ -274,6 +274,7 @@ def main() -> int:
     print("\033[91m         Press it immediately if the robot motion looks unsafe.\033[0m\n")
 
     urdf = get_default_urdf_path()
+    vision_device = "/dev/video2"
 
     kin_cfg = D1KinematicsConfig(
         urdf_path=urdf,
@@ -292,6 +293,7 @@ def main() -> int:
             hand_type="right",
             hand_can="can0",
             hand_baud=1_000_000,
+            vision_device=vision_device,
         ) as robot:
 
             q_init_deg = [

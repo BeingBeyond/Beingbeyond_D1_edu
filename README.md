@@ -88,7 +88,8 @@ The examples use these default device paths:
 | Glove | `/dev/ttyACM1` |
 
 If your machine assigns different device names, edit the constants near the
-top of the corresponding example file.
+top of the corresponding example file. For examples that use `D1Robot`, set
+`vision_device` when creating `D1Robot`.
 
 ---
 
@@ -199,6 +200,13 @@ python 1_control_hand.py
 
 Uses `can0`. This verifies DexHand CAN communication, normalized finger
 commands, speed, torque, and readback.
+
+After the motion checks, this example opens an OpenCV tactile preview window
+for the DexHand 5-finger 4x10 sensor matrices. Press `q` in the tactile window
+to exit. The tactile preview requires an SDK build that exposes
+`DexHand.read_matrix_touch_4x10`; if you are using an older pre-built wheel,
+rebuild/reinstall the SDK from the updated `package/` source before running
+this part.
 
 ### 6.2 Head + Arm Control
 
@@ -360,8 +368,11 @@ ls /dev/video*
 v4l2-ctl --list-devices
 ```
 
+To confirm the video source, check the existing `/dev/video*` devices first,
+then plug in the robot and compare which new `/dev/video*` device appears.
+
 If the camera is not `/dev/video2`, update `device` in `3_show_vision.py`
-or the camera settings in `D1_robot.py`.
+or `vision_device` in the example that creates `D1Robot`.
 
 ### Exoskeleton or Glove Does Not Open
 

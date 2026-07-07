@@ -9,7 +9,8 @@ from vision import StereoRGBCamera
 
 class D1Robot:
     def __init__(self, urdf_path: str, arm_dev: str, arm_baud: int,
-                 hand_type: str, hand_can: str, hand_baud: int):
+                 hand_type: str, hand_can: str, hand_baud: int,
+                 vision_device: str = "/dev/video2"):
         self.head_arm = HeadArmRobot(
             urdf_path=urdf_path,
             dev=arm_dev,
@@ -21,7 +22,7 @@ class D1Robot:
             baudrate=hand_baud,
         )
 
-        self.vision = StereoRGBCamera()
+        self.vision = StereoRGBCamera(device=vision_device)
 
         # Vision thread control
         self._vision_thread = None

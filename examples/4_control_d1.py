@@ -57,6 +57,7 @@ def main() -> int:
 
     from beingbeyond_d1_edu_sdk.urdf_path import get_default_urdf_path
     urdf = get_default_urdf_path()
+    vision_device = "/dev/video2"
 
     try:
         with D1Robot(
@@ -66,6 +67,7 @@ def main() -> int:
             hand_type="right",
             hand_can="can0",
             hand_baud=1000000,
+            vision_device=vision_device,
         ) as robot:
             vels_rad = deg_list_to_rad([30.0] * 8)
             accs_rad = deg_list_to_rad([30.0] * 8)

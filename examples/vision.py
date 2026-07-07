@@ -9,10 +9,13 @@ This module defines StereoRGBCamera, which:
 import cv2
 
 
+DEFAULT_DEVICE = "/dev/video2"
+
+
 class StereoRGBCamera:
     def __init__(
         self,
-        device="/dev/video2",
+        device=DEFAULT_DEVICE,
         single_width=640,
         single_height=480,
         fps=30,
@@ -41,7 +44,11 @@ class StereoRGBCamera:
 
         cap = cv2.VideoCapture(self.device, cv2.CAP_V4L2)
         if not cap.isOpened():
-            raise RuntimeError(f"Could not open camera: {self.device}")
+            raise RuntimeError(
+                f"Could not open camera: {self.device}. "
+                "Check /dev/video* and set device in the example script, "
+                "or pass vision_device when creating D1Robot."
+            )
 
         if self.fourcc.upper() != "NONE":
             if len(self.fourcc) != 4:
