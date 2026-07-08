@@ -1,6 +1,5 @@
 # Recommended full development/runtime environment for BeingBeyond D1 EDU SDK.
-# Python: 3.10 is recommended. Python 3.11 may work, but 3.10 has the lowest
-# risk for robotics binary wheels such as pin/cvxpy/Cython extensions.
+# Python: 3.8 is recommended for Isaac Gym compatibility and the cp38 SDK wheel.
 
 numpy>=1.23,<2.0
 pyserial>=3.5,<4

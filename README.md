@@ -31,14 +31,14 @@ hardware connections, and first-time troubleshooting.
 
 ### 1.2 Software
 
-- Python 3.10
+- Python 3.8
 - Conda
 - OpenCV for RGB display
 - PyBullet for simulation teleoperation
 - Pre-built SDK wheel in `lib/`:
 
 ```text
-lib/beingbeyond_d1_edu_sdk-0.2.0-cp310-cp310-linux_x86_64.whl
+lib/beingbeyond_d1_edu_sdk-0.2.0-cp38-cp38-linux_x86_64.whl
 ```
 
 The recommended dependencies are listed in `environment.yml` and
@@ -61,7 +61,7 @@ conda activate d1_edu
 
 ```bash
 pip install -U pip
-pip install lib/beingbeyond_d1_edu_sdk-0.2.0-cp310-cp310-linux_x86_64.whl
+pip install lib/beingbeyond_d1_edu_sdk-0.2.0-cp38-cp38-linux_x86_64.whl
 ```
 
 ### 2.3 Install or Refresh Dependencies
