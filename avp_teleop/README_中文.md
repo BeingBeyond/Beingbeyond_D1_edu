@@ -27,7 +27,7 @@ avp_teleop/
 - Python **3.8**（建议）
 - Isaac Gym (**Preview 4**)
 - 已安装并可导入：
-  - `beingbeyond_d1_sdk`
+  - `beingbeyond_d1_edu_sdk`
   - `avp_stream`
   - `pinocchio`
   - `scipy`

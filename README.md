@@ -133,12 +133,13 @@ top of the corresponding example file. For examples that use `D1Robot`, set
 
 ## 4. USB, Serial, and CAN Permissions
 
-### 4.1 Check USB Serial Devices
+### 4.1 Check USB, Video, and Serial Devices
 
 ```bash
 ls /dev/ttyACM*
 ls /dev/ttyUSB*
 ls /dev/video*
+ls -l /dev/v4l/by-id/
 ```
 
 Expected devices for the default examples:
@@ -150,8 +151,13 @@ Expected devices for the default examples:
 /dev/v4l/by-id/usb-SunplusIT_Inc_SPCA2100_PC_Camera-video-index0
 ```
 
-If a USB serial device does not appear, reconnect the cable. On Ubuntu,
-`brltty` can sometimes occupy serial adapters:
+`ls /dev/video*` shows numeric V4L2 nodes such as `/dev/video0`. It does not
+show the stable `/dev/v4l/by-id/...` symlink used by the camera examples. Use
+`ls -l /dev/v4l/by-id/` to confirm that the symlink exists and points to the
+correct numeric video node.
+
+If a USB serial or video device does not appear, reconnect the cable. On
+Ubuntu, `brltty` can sometimes occupy serial adapters:
 
 ```bash
 sudo apt remove brltty
@@ -447,14 +453,32 @@ Check the camera device:
 
 ```bash
 ls /dev/video*
+ls -l /dev/v4l/by-id/
 v4l2-ctl --list-devices
 ```
 
 To confirm the video source, check the existing `/dev/video*` devices first,
 then plug in the robot and compare which new `/dev/video*` device appears.
+Then check which stable by-id symlink points to that numeric node:
 
-If the camera is not `/dev/v4l/by-id/usb-SunplusIT_Inc_SPCA2100_PC_Camera-video-index0`, update `device` in `3_show_vision.py`
-or `vision_device` in the example that creates `D1Robot`.
+```bash
+ls -l /dev/v4l/by-id/
+```
+
+The default camera path used by the examples is:
+
+```text
+/dev/v4l/by-id/usb-SunplusIT_Inc_SPCA2100_PC_Camera-video-index0
+```
+
+If the camera is not available at this path, update the matching camera
+configuration in the example you run:
+
+- `device` in `3_show_vision.py`
+- `vision_device` in examples that create `D1Robot`, such as
+  `4_control_d1.py`, `6_keyboard_teleop.py`, and `8_exo_teleop_real.py`
+- `StereoCfg.device` in `9_rock_paper_scissors_sim.py`
+- `StereoCfg.device` in `10_rock_paper_scissors_real.py`
 
 ### Exoskeleton or Glove Does Not Open
 

@@ -27,7 +27,7 @@ The shared `dex-retargeting` dependency lives at `../lib/dex-retargeting`.
 - Python **3.8** (recommended)
 - Isaac Gym (**Preview 4**)
 - Installed and importable:
-  - `beingbeyond_d1_sdk`
+  - `beingbeyond_d1_edu_sdk`
   - `avp_stream`
   - `pinocchio`
   - `scipy`

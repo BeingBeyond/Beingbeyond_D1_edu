@@ -46,8 +46,9 @@ class StereoRGBCamera:
         if not cap.isOpened():
             raise RuntimeError(
                 f"Could not open camera: {self.device}. "
-                "Check /dev/video* and set device in the example script, "
-                "or pass vision_device when creating D1Robot."
+                "Check /dev/video* and /dev/v4l/by-id/, then set device "
+                "in the example script or pass vision_device when creating "
+                "D1Robot."
             )
 
         if self.fourcc.upper() != "NONE":
