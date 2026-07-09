@@ -16,4 +16,5 @@ build>=1.2
 
 # Optional but useful for this repository.
 opencv-python>=4.8,<5
+mediapipe==0.10.11
 meshcat>=0.3,<1

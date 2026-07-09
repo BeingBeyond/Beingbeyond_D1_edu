@@ -60,7 +60,7 @@ dev_requirements = [
     "mypy",
 ]
 
-example_requirements = ["tyro", "tqdm", "opencv-python", "mediapipe", "sapien==3.0.0b0", "loguru"]
+example_requirements = ["tyro", "tqdm", "opencv-python", "mediapipe==0.10.11", "sapien==3.0.0b0", "loguru"]
 
 classifiers = [
     "Development Status :: 3 - Alpha",

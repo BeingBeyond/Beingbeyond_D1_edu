@@ -102,7 +102,9 @@ python -c "from isaacgym import gymapi; print('Isaac Gym OK')"
 
 Camera-based hand retargeting examples, such as
 `9_rock_paper_scissors_sim.py` and `10_rock_paper_scissors_real.py`, also
-require the bundled `dex_retargeting` package and MediaPipe.
+require the bundled `dex_retargeting` package and MediaPipe. Use
+`mediapipe==0.10.11`; newer MediaPipe releases can change hand-landmark
+behavior and may affect gesture classification.
 
 ```bash
 pip install -e lib/dex-retargeting
