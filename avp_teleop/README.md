@@ -14,10 +14,11 @@ avp_teleop/
 ├── d1_isaac_control.py
 ├── d1_isaac_replay.py
 ├── demo_data/
-├── dex-retargeting/
 ├── README.md
 └── README_中文.md
 ```
+
+The shared `dex-retargeting` dependency lives at `../lib/dex-retargeting`.
 
 ---
 
@@ -43,7 +44,7 @@ avp_teleop/
 
 ### Step 1: Enter the project directory
 ```bash
-cd avp_teleop
+cd Beingbeyond_D1_edu
 ```
 
 ### Step 2: Install key pinned dependencies
@@ -55,9 +56,7 @@ pip install "pin==2.7.0"
 
 ### Step 3: Install local `dex_retargeting`
 ```bash
-cd dex-retargeting
-pip install -e .
-cd ..
+pip install -e lib/dex-retargeting
 ```
 
 Check installation:
@@ -76,7 +75,7 @@ pip install scipy opencv-python
 
 ### A. Real-time Teleoperation (Vision Pro)
 
-Script: `d1_isaac_control.py`
+Script: `avp_teleop/d1_isaac_control.py`
 
 Features:
 - A subprocess connects to Vision Pro and writes data into shared memory
@@ -85,18 +84,18 @@ Features:
 
 Run command:
 ```bash
-python d1_isaac_control.py --ip <VISION_PRO_IP>
+python avp_teleop/d1_isaac_control.py --ip <VISION_PRO_IP>
 ```
 
 Example:
 ```bash
-python d1_isaac_control.py --ip 192.168.20.100
+python avp_teleop/d1_isaac_control.py --ip 192.168.20.100
 ```
 
 Notes:
 - Without `--ip`, it runs in simulation-only mode (no external input):
   ```bash
-  python d1_isaac_control.py
+  python avp_teleop/d1_isaac_control.py
   ```
 - After the Isaac Gym viewer opens, press **`S`** to:
   - Calibrate (set the current hand pose as the reference)
@@ -106,20 +105,20 @@ Notes:
 
 ### B. Offline Replay (`.npz` data)
 
-Script: `d1_isaac_replay.py`
+Script: `avp_teleop/d1_isaac_replay.py`
 
 Run command:
 ```bash
-python d1_isaac_replay.py
+python avp_teleop/d1_isaac_replay.py
 ```
 
 Notes:
 - By default, it loads the `.npz` file specified by `ReplayCfg.tracking_data_path`
 - Replay automatically resets and loops when it reaches the end
 
-If you want to use your own data file, edit `d1_isaac_replay.py` and modify:
+If you want to use your own data file, edit `avp_teleop/d1_isaac_replay.py` and modify:
 ```python
-tracking_data_path = "demo_data/demo_data.npz"
+tracking_data_path = str(AVP_TELEOP_DIR / "demo_data" / "demo_data.npz")
 ```
 ---
 

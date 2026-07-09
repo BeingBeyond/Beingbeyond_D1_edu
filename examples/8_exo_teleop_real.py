@@ -154,7 +154,7 @@ class TeleopRealCfg:
     robot_hand_type: str = "right"
     robot_hand_can: str = "can0"
     robot_hand_baud: int = 1_000_000
-    robot_vision_device: str = "/dev/video2"
+    robot_vision_device: str = "/dev/v4l/by-id/usb-SunplusIT_Inc_SPCA2100_PC_Camera-video-index0"
 
     arm_min_valid: int = 4
 

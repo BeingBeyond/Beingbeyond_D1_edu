@@ -274,7 +274,7 @@ def main() -> int:
     print("\033[91m         Press it immediately if the robot motion looks unsafe.\033[0m\n")
 
     urdf = get_default_urdf_path()
-    vision_device = "/dev/video2"
+    vision_device = "/dev/v4l/by-id/usb-SunplusIT_Inc_SPCA2100_PC_Camera-video-index0"
 
     kin_cfg = D1KinematicsConfig(
         urdf_path=urdf,

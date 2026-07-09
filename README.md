@@ -12,8 +12,6 @@ hardware connections, and first-time troubleshooting.
 > Keep the physical emergency stop button within reach at all times.
 > Press it immediately if the robot motion looks unsafe.
 
----
-
 ## 1. Requirements
 
 ### 1.1 Hardware
@@ -35,6 +33,7 @@ hardware connections, and first-time troubleshooting.
 - Conda
 - OpenCV for RGB display
 - PyBullet for simulation teleoperation
+- Optional: Isaac Gym Preview 4 for Isaac Gym simulation examples
 - Pre-built SDK wheel in `lib/`:
 
 ```text
@@ -73,6 +72,43 @@ pip install -r requirements.txt
 pip install opencv-python pybullet
 ```
 
+### 2.4 Optional Isaac Gym Setup
+
+Isaac Gym is only required for examples that use the Isaac Gym viewer, such as
+`0_isaac_joint_control.py` and `9_rock_paper_scissors_sim.py`. Skip this
+section if you only run the physical robot examples.
+
+Install the Isaac Gym Python package from your Isaac Gym Preview 4 download:
+
+```bash
+cd /path/to/IsaacGym_Preview_4_Package/isaacgym/python
+pip install -e .
+```
+
+Recommended pins for the Isaac Gym environment:
+
+```bash
+pip install "numpy==1.24.4"
+pip install "pin==2.7.0"
+```
+
+Verify the installation:
+
+```bash
+python -c "from isaacgym import gymapi; print('Isaac Gym OK')"
+```
+
+### 2.5 Optional Hand Retargeting Setup
+
+Camera-based hand retargeting examples, such as
+`9_rock_paper_scissors_sim.py` and `10_rock_paper_scissors_real.py`, also
+require the bundled `dex_retargeting` package and MediaPipe.
+
+```bash
+pip install -e lib/dex-retargeting
+pip install mediapipe==0.10.11
+```
+
 ---
 
 ## 3. Device Defaults
@@ -83,7 +119,7 @@ The examples use these default device paths:
 | --- | --- |
 | Head + arm controller | `/dev/ttyACM0` |
 | DexHand CAN interface | `can0` |
-| USB stereo RGB camera | `/dev/video2` |
+| USB stereo RGB camera | `/dev/v4l/by-id/usb-SunplusIT_Inc_SPCA2100_PC_Camera-video-index0` |
 | Arm exoskeleton | `/dev/ttyUSB0` |
 | Glove | `/dev/ttyACM1` |
 
@@ -109,7 +145,7 @@ Expected devices for the default examples:
 /dev/ttyACM0
 /dev/ttyUSB0
 /dev/ttyACM1
-/dev/video2
+/dev/v4l/by-id/usb-SunplusIT_Inc_SPCA2100_PC_Camera-video-index0
 ```
 
 If a USB serial device does not appear, reconnect the cable. On Ubuntu,
@@ -192,6 +228,17 @@ Run examples from the `examples` directory:
 cd examples
 ```
 
+### 6.0 Isaac Gym Joint Control
+
+```bash
+python 0_isaac_joint_control.py
+```
+
+Simulation-only. This opens an Isaac Gym viewer and a slider panel so you can
+inspect D1 joint names, order, limits, and motion directions before running the
+physical robot. It is recommended for first-time users, but you can skip it if
+you already know the robot and want to run the real hardware examples directly.
+
 ### 6.1 DexHand Control
 
 ```bash
@@ -223,7 +270,7 @@ one joint at a time.
 python 3_show_vision.py
 ```
 
-Uses `/dev/video2`. This example shows RGB from the side-by-side USB stereo
+Uses `/dev/v4l/by-id/usb-SunplusIT_Inc_SPCA2100_PC_Camera-video-index0`. This example shows RGB from the side-by-side USB stereo
 camera in one OpenCV window. Press `q` in the window to exit.
 
 ### 6.4 Full D1 Demo
@@ -314,6 +361,39 @@ This example sends exoskeleton arm motion and glove finger values to the real
 D1 robot through the `D1Robot` interface. At startup, keep the arm exoskeleton
 still in its zero pose until zero calibration finishes.
 
+### 6.9 Rock-Paper-Scissors in Simulation
+
+```bash
+python 9_rock_paper_scissors_sim.py
+```
+
+Simulation-only. This opens the USB stereo RGB camera, detects the operator's
+right hand with MediaPipe, classifies rock, paper, or scissors, and commands
+the simulated D1 hand in Isaac Gym to play the winning gesture. This example
+requires the optional Isaac Gym setup and optional hand retargeting setup above.
+
+### 6.10 Rock-Paper-Scissors on Real DexHand
+
+```bash
+python 10_rock_paper_scissors_real.py
+```
+
+Real hardware. This opens the USB stereo RGB camera, detects the operator's
+right hand with MediaPipe, classifies rock, paper, or scissors, and commands
+the real right DexHand to play the winning gesture. It also moves the head +
+arm to a game-ready pose at startup and can use different head + arm postures
+for each robot gesture. Keep the emergency stop button within reach and make
+sure `/dev/ttyACM0` and `can0` are ready before running it.
+
+Useful tuning switches are near the top of `10_rock_paper_scissors_real.py`:
+
+- `RpsArmCfg.enabled`: enable or disable the per-gesture head + arm postures.
+- `IdleCfg.enabled`: enable or disable the optional idle dance / thumbs-up
+  behavior when no active rock-paper-scissors gesture is detected. It is
+  disabled by default.
+- `RpsCfg`: tune classification thresholds and stable-frame counts if the
+  camera or hand pose causes frequent `unknown` results.
+
 ---
 
 ## 7. Troubleshooting
@@ -371,7 +451,7 @@ v4l2-ctl --list-devices
 To confirm the video source, check the existing `/dev/video*` devices first,
 then plug in the robot and compare which new `/dev/video*` device appears.
 
-If the camera is not `/dev/video2`, update `device` in `3_show_vision.py`
+If the camera is not `/dev/v4l/by-id/usb-SunplusIT_Inc_SPCA2100_PC_Camera-video-index0`, update `device` in `3_show_vision.py`
 or `vision_device` in the example that creates `D1Robot`.
 
 ### Exoskeleton or Glove Does Not Open

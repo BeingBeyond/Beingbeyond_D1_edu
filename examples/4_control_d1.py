@@ -57,7 +57,7 @@ def main() -> int:
 
     from beingbeyond_d1_edu_sdk.urdf_path import get_default_urdf_path
     urdf = get_default_urdf_path()
-    vision_device = "/dev/video2"
+    vision_device = "/dev/v4l/by-id/usb-SunplusIT_Inc_SPCA2100_PC_Camera-video-index0"
 
     try:
         with D1Robot(

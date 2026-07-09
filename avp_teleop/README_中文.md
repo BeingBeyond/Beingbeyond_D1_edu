@@ -14,10 +14,11 @@ avp_teleop/
 ├── d1_isaac_control.py
 ├── d1_isaac_replay.py
 ├── demo_data/
-├── dex-retargeting/
 ├── README.md
 └── README_中文.md
 ```
+
+共享的 `dex-retargeting` 依赖位于 `../lib/dex-retargeting`。
 
 ---
 
@@ -44,7 +45,7 @@ avp_teleop/
 
 ### 步骤 1：进入项目目录
 ```bash
-cd avp_teleop
+cd Beingbeyond_D1_edu
 ```
 
 ### 步骤 2：安装关键版本依赖
@@ -57,9 +58,7 @@ pip install "pin==2.7.0"
 ### 步骤 3：安装本地 `dex_retargeting`
 
 ```bash
-cd dex-retargeting
-pip install -e .
-cd ..
+pip install -e lib/dex-retargeting
 ```
 
 安装后可检查：
@@ -78,7 +77,7 @@ pip install scipy opencv-python
 
 ### A. 实时遥操作（Vision Pro）
 
-脚本：`d1_isaac_control.py`
+脚本：`avp_teleop/d1_isaac_control.py`
 
 功能：
 - 子进程连接 Vision Pro 并写入共享内存
@@ -87,18 +86,18 @@ pip install scipy opencv-python
 
 运行命令：
 ```bash
-python d1_isaac_control.py --ip <VISION_PRO_IP>
+python avp_teleop/d1_isaac_control.py --ip <VISION_PRO_IP>
 ```
 
 示例：
 ```bash
-python d1_isaac_control.py --ip 192.168.20.100
+python avp_teleop/d1_isaac_control.py --ip 192.168.20.100
 ```
 
 说明：
 - 不传 `--ip` 时，会以纯仿真模式运行（无外部输入）：
   ```bash
-  python d1_isaac_control.py
+  python avp_teleop/d1_isaac_control.py
   ```
 - 打开 Isaac Gym viewer 后，按 **`S`**：
   - 执行标定（记录当前手部为参考原点）
@@ -108,20 +107,20 @@ python d1_isaac_control.py --ip 192.168.20.100
 
 ### B. 离线回放（`.npz` 数据）
 
-脚本：`d1_isaac_replay.py`
+脚本：`avp_teleop/d1_isaac_replay.py`
 
 运行命令：
 ```bash
-python d1_isaac_replay.py
+python avp_teleop/d1_isaac_replay.py
 ```
 
 说明：
 - 默认读取脚本中 `ReplayCfg.tracking_data_path` 指定的 `.npz`
 - 回放结束后会自动重置并循环播放
 
-如果你要使用自己的数据文件，请修改 `d1_isaac_replay.py` 中的：
+如果你要使用自己的数据文件，请修改 `avp_teleop/d1_isaac_replay.py` 中的：
 ```python
-tracking_data_path = "demo_data/demo_data.npz"
+tracking_data_path = str(AVP_TELEOP_DIR / "demo_data" / "demo_data.npz")
 ```
 
 ---
@@ -137,4 +136,3 @@ tracking_data_path = "demo_data/demo_data.npz"
 
 ### 可选字段
 - `right_fingers`: `(T, 25, 4, 4)`
-

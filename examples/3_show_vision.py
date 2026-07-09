@@ -16,7 +16,7 @@ from vision import StereoRGBCamera
 
 
 def main():
-    device = "/dev/video2"
+    device = "/dev/v4l/by-id/usb-SunplusIT_Inc_SPCA2100_PC_Camera-video-index0"
     single_width = 640
     single_height = 480
     fps_request = 30

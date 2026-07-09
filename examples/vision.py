@@ -9,7 +9,7 @@ This module defines StereoRGBCamera, which:
 import cv2
 
 
-DEFAULT_DEVICE = "/dev/video2"
+DEFAULT_DEVICE = "/dev/v4l/by-id/usb-SunplusIT_Inc_SPCA2100_PC_Camera-video-index0"
 
 
 class StereoRGBCamera:

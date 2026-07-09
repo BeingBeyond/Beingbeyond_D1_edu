@@ -10,7 +10,7 @@ from vision import StereoRGBCamera
 class D1Robot:
     def __init__(self, urdf_path: str, arm_dev: str, arm_baud: int,
                  hand_type: str, hand_can: str, hand_baud: int,
-                 vision_device: str = "/dev/video2"):
+                 vision_device: str = "/dev/v4l/by-id/usb-SunplusIT_Inc_SPCA2100_PC_Camera-video-index0"):
         self.head_arm = HeadArmRobot(
             urdf_path=urdf_path,
             dev=arm_dev,

@@ -67,6 +67,7 @@ from beingbeyond_d1_edu_sdk.urdf_path import get_default_urdf_path
 
 HEAD_JOINT_NAMES = ("joint_7_head_yaw", "joint_8_head_pitch")
 ARM_JOINT_NAMES = ("joint_1", "joint_2", "joint_3", "joint_4", "joint_5", "joint_6")
+AVP_TELEOP_DIR = Path(__file__).resolve().parent
 
 
 @dataclass(frozen=True)
@@ -101,7 +102,7 @@ class CameraCfg:
 
 @dataclass(frozen=True)
 class ReplayCfg:
-    tracking_data_path: str = "demo_data/demo_data.npz"
+    tracking_data_path: str = str(AVP_TELEOP_DIR / "demo_data" / "demo_data.npz")
     q_init_deg: Tuple[float, ...] = (
         0.0, 0.0,          # head_yaw, head_pitch
         0.0, -60.0, 60.0,
