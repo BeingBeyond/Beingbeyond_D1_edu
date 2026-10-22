@@ -15,7 +15,7 @@ import importlib
 import random
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
@@ -28,6 +28,7 @@ from beingbeyond_d1_edu_sdk.urdf_path import get_default_urdf_path
 
 from vision import StereoRGBCamera
 from utils import deg_list_to_rad
+from device_detection import resolve_devices
 
 
 EXAMPLES_DIR = Path(__file__).resolve().parent
@@ -54,7 +55,7 @@ GESTURE_LABELS = {
 
 @dataclass(frozen=True)
 class StereoCfg:
-    device: str = "/dev/v4l/by-id/usb-SunplusIT_Inc_SPCA2100_PC_Camera-video-index0"
+    device: str = "auto"
     single_width: int = 640
     single_height: int = 480
     fps: int = 30
@@ -65,7 +66,7 @@ class StereoCfg:
 
 @dataclass(frozen=True)
 class HeadArmCfg:
-    dev: str = "/dev/ttyACM0"
+    dev: str = "auto"
     baudrate: int = 1_000_000
     q_init_deg: Tuple[float, ...] = (
         0.0, -15.0,
@@ -79,7 +80,7 @@ class HeadArmCfg:
 @dataclass(frozen=True)
 class HandCfg:
     hand_type: str = "right"
-    can_iface: str = "can0"
+    can_iface: str = "auto"
     baudrate: int = 1_000_000
     speed: Tuple[float, ...] = (1.0, 1.0, 1.0, 1.0, 1.0, 1.0)
     torque: Tuple[float, ...] = (1.0, 1.0, 1.0, 1.0, 1.0, 1.0)
@@ -533,6 +534,11 @@ def main() -> None:
     stereo_cfg = StereoCfg()
     head_arm_cfg = HeadArmCfg()
     hand_cfg = HandCfg()
+    devices = resolve_devices(head_arm=head_arm_cfg.dev, can_iface=hand_cfg.can_iface,
+                              camera=stereo_cfg.device, head_arm_baud=head_arm_cfg.baudrate)
+    head_arm_cfg = replace(head_arm_cfg, dev=devices["head_arm"])
+    hand_cfg = replace(hand_cfg, can_iface=devices["can_iface"])
+    stereo_cfg = replace(stereo_cfg, device=devices["camera"])
     rps_arm_cfg = RpsArmCfg()
     rps_cfg = RpsCfg()
     idle_cfg = IdleCfg()

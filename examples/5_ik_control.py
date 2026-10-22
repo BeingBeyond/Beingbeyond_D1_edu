@@ -25,6 +25,7 @@ from beingbeyond_d1_edu_sdk.pin_kinematics import (
 )
 
 from utils import deg_list_to_rad, rad_list_to_deg
+from device_detection import resolve_head_arm
 
 
 def main():
@@ -33,7 +34,7 @@ def main():
 
     from beingbeyond_d1_edu_sdk.urdf_path import get_default_urdf_path
     urdf = get_default_urdf_path()
-    dev = "/dev/ttyACM0"
+    dev = resolve_head_arm("auto")
     baudrate = 1_000_000
 
     # 1) Construct kinematics

@@ -25,19 +25,20 @@ from exo_glove_teleop_common import (
     transform_arm_exo_to_arm_deg,
     validate_common_cfg,
     validate_urdf_path,
+    resolve_teleop_devices,
 )
 
 
 @dataclass
 class TeleopSimCfg:
-    arm_exo_port: str = "/dev/ttyUSB0"
+    arm_exo_port: str = "auto"
     arm_exo_baudrate: int = 115200
     arm_exo_servo_ids: List[int] = field(default_factory=lambda: [1, 2, 3, 4, 5, 6])
     arm_exo_read_hz: float = 10.0
     arm_exo_command_delay_s: float = 0.008
     release_arm_exo_torque_on_start: bool = True
 
-    glove_port: str = "/dev/ttyACM1"
+    glove_port: str = "auto"
     glove_baudrate: int = 115200
     glove_timeout_s: float = 0.01
     glove_auto_calib: bool = True
@@ -185,6 +186,7 @@ class TeleopSimulator:
     def run(self) -> None:
         print("=== Exo + Glove Teleop Sim ===")
         validate_cfg(self.cfg)
+        self.cfg = resolve_teleop_devices(self.cfg)
         self._open_inputs()
         self._open_sim()
 

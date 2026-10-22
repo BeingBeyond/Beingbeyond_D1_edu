@@ -6,23 +6,26 @@ from beingbeyond_d1_edu_sdk import HeadArmRobot
 from beingbeyond_d1_edu_sdk.hand import DexHand
 
 from vision import StereoRGBCamera
+from device_detection import resolve_devices
 
 class D1Robot:
     def __init__(self, urdf_path: str, arm_dev: str, arm_baud: int,
                  hand_type: str, hand_can: str, hand_baud: int,
-                 vision_device: str = "/dev/v4l/by-id/usb-SunplusIT_Inc_SPCA2100_PC_Camera-video-index0"):
+                 vision_device: str = "auto"):
+        devices = resolve_devices(head_arm=arm_dev, can_iface=hand_can,
+                                  camera=vision_device, head_arm_baud=arm_baud)
         self.head_arm = HeadArmRobot(
             urdf_path=urdf_path,
-            dev=arm_dev,
+            dev=devices["head_arm"],
             baudrate=arm_baud,
         )
         self.hand = DexHand(
             hand_type=hand_type,
-            can_iface=hand_can,
+            can_iface=devices["can_iface"],
             baudrate=hand_baud,
         )
 
-        self.vision = StereoRGBCamera(device=vision_device)
+        self.vision = StereoRGBCamera(device=devices["camera"])
 
         # Vision thread control
         self._vision_thread = None

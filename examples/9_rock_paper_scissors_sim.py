@@ -110,7 +110,7 @@ class HeadArmCfg:
 
 @dataclass(frozen=True)
 class StereoCfg:
-    device: str = "/dev/v4l/by-id/usb-SunplusIT_Inc_SPCA2100_PC_Camera-video-index0"
+    device: str = "auto"
     single_width: int = 640
     single_height: int = 480
     fps: int = 30

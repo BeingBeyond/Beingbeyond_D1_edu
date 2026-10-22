@@ -7,9 +7,10 @@ This module defines StereoRGBCamera, which:
   - Builds a single RGB display view from both eyes or either eye
 """
 import cv2
+from device_detection import resolve_camera_device
 
 
-DEFAULT_DEVICE = "/dev/v4l/by-id/usb-SunplusIT_Inc_SPCA2100_PC_Camera-video-index0"
+DEFAULT_DEVICE = "auto"
 
 
 class StereoRGBCamera:
@@ -26,7 +27,7 @@ class StereoRGBCamera:
         if view not in ("both", "left", "right"):
             raise ValueError("view must be 'both', 'left', or 'right'")
 
-        self.device = device
+        self.device = resolve_camera_device(device)
         self.single_width = single_width
         self.single_height = single_height
         self.fps = fps

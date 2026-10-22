@@ -22,6 +22,7 @@ import cv2
 import numpy as np
 
 from beingbeyond_d1_edu_sdk.hand import DexHand
+from device_detection import resolve_can_iface
 
 
 FINGER_NAMES = ["thumb", "index", "middle", "ring", "little"]
@@ -132,7 +133,7 @@ def main():
     print("\033[91mWARNING: Always keep the physical emergency stop button within reach,\033[0m")
     print("\033[91m         and press it immediately if the robot motion looks unsafe.\033[0m\n")
 
-    right_hand = DexHand(hand_type="right", can_iface="can0")
+    right_hand = DexHand(hand_type="right", can_iface=resolve_can_iface("auto"))
 
     try:
         right_hand.gesture_dance(duration_s=3, m=0.1, interval_s=0.1)

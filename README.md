@@ -115,19 +115,77 @@ pip install mediapipe==0.10.10
 
 ## 3. Device Defaults
 
-The examples use these default device paths:
+All hardware examples default to `auto`. Discovery does not depend on port
+numbers, insertion order, or a particular unit's USB serial number.
 
 | Device | Default |
 | --- | --- |
-| Head + arm controller | `/dev/ttyACM0` |
-| DexHand CAN interface | `can0` |
-| USB stereo RGB camera | `/dev/v4l/by-id/usb-SunplusIT_Inc_SPCA2100_PC_Camera-video-index0` |
-| Arm exoskeleton | `/dev/ttyUSB0` |
-| Glove | `/dev/ttyACM1` |
+| Head + arm controller | `auto`: USB `1a86:55d3`, then read and validate all 8 servo IDs at 1 Mbps |
+| DexHand CAN interface | `auto`: enumerate the USB `0c72:000c` SocketCAN adapter |
+| USB stereo RGB camera | `auto`: select USB `15aa:1955`, video index 0 |
+| Arm exoskeleton | `auto`: USB `1a86:7523`, then validate position responses for configured servo IDs |
+| Glove | `auto`: USB `1a86:55d3`, then receive 3 consecutive valid six-channel `ANGLES:` frames |
 
-If your machine assigns different device names, edit the constants near the
-top of the corresponding example file. For examples that use `D1Robot`, set
-`vision_device` when creating `D1Robot`.
+Head/arm and glove use the same USB model, so their roles are determined by
+protocol responses, not by ACM numbers. Head/arm detection checks reply IDs,
+lengths and checksums. Exoskeleton detection checks each reply's ID and position
+range. Discovery sends only read queries; it does not enable torque, release
+torque, move joints, calibrate, or instantiate SDK controllers. Opening a serial
+port can still reset some boards; probes set DTR/RTS inactive before opening.
+
+Examples 7 and 8 resolve their complete device configuration before calibration
+or control. Other examples detect only the devices they use; example 0 is pure
+simulation. Startup prints each selected role and device. Detection is performed
+again on each startup, with no saved serial-number binding or stale port cache.
+
+Stop other programs using the devices before starting an example or active
+diagnostics. A busy/inaccessible candidate, missing protocol response, or multiple
+verified candidates causes an error instead of selecting the first port. Legacy
+process detection via `/proc` is best-effort and subject to OS permissions;
+exclusive probe locks also prevent cooperating probes from sharing a serial port.
+If another device takes `ACM0`, detection can select the D1 at a different number;
+it cannot free a D1 port held by another program. The current automatic USB filters
+support the models in the table; other adapters require an explicit override or
+an extension of `SERIAL_USB_IDS` / `CAN_USB_IDS` / `CAMERA_USB_IDS` in
+`examples/device_detection.py`.
+
+For one matching device of each role, run example 8 as usual:
+
+```bash
+python examples/8_exo_teleop_real.py
+```
+
+To test discovery without initializing robot controllers:
+
+```bash
+# Passive serial inventory: does not open devices.
+python examples/device_detection.py --list
+
+# Serial read probes, fresh right-hand CAN status, and one stereo camera frame.
+python examples/device_detection.py --check
+
+# Check only the external inputs used by example 7.
+python examples/device_detection.py --roles exo glove
+```
+
+`--check` never configures the CAN link: it must already be UP at 1 Mbps.
+Normal examples still let the SDK configure the selected CAN interface as before.
+Automatic CAN/camera selection uses hardware metadata; `--check` additionally
+verifies an actual CAN reply and camera capture. Two indistinguishable adapters
+or cameras require an explicit selection. Right/left hand is still an explicit
+application setting; the diagnostic checks the right hand.
+
+Explicit paths or CAN names remain supported in the example configurations.
+For example, set `robot_arm_dev="/dev/serial/by-id/..."`, `glove_port="/dev/ttyACM2"`,
+or `robot_hand_can="can1"` in `TeleopRealCfg`. Explicit selections bypass automatic
+role probes and are passed to the normal driver. They are useful for unsupported
+adapters or resolving ambiguity, but the caller must select the correct device.
+
+Run the discovery regression tests (no hardware access):
+
+```bash
+python -m unittest discover -s tests -v
+```
 
 ---
 
