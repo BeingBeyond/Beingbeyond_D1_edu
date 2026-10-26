@@ -169,17 +169,25 @@ python examples/device_detection.py --roles exo glove
 ```
 
 `--check` never configures the CAN link: it must already be UP at 1 Mbps.
-Normal examples still let the SDK configure the selected CAN interface as before.
-Automatic CAN/camera selection uses hardware metadata; `--check` additionally
-verifies an actual CAN reply and camera capture. Two indistinguishable adapters
+Motion examples using CAN also check the configured hand's reply before controller
+initialization, so bring up the confirmed interface before starting them.
+`D1Robot` and examples 8/10 additionally check camera capture before creating
+controllers. Automatic CAN/camera selection alone uses hardware metadata;
+`--check` additionally verifies an actual CAN reply and camera capture.
+Use `--hand-type left` to diagnose the left hand. Two indistinguishable adapters
 or cameras require an explicit selection. Right/left hand is still an explicit
 application setting; the diagnostic checks the right hand.
 
 Explicit paths or CAN names remain supported in the example configurations.
 For example, set `robot_arm_dev="/dev/serial/by-id/..."`, `glove_port="/dev/ttyACM2"`,
-or `robot_hand_can="can1"` in `TeleopRealCfg`. Explicit selections bypass automatic
-role probes and are passed to the normal driver. They are useful for unsupported
-adapters or resolving ambiguity, but the caller must select the correct device.
+or `robot_hand_can="can1"` in `TeleopRealCfg`. Explicit selections bypass USB
+identity filtering. Motion examples still verify serial protocol responses,
+CAN communication and requested camera capture before controller initialization.
+They are useful for unsupported adapters or resolving ambiguity.
+`TeleopRealCfg.enable_camera=False` omits camera discovery and capture checks.
+Passive CAN/camera failures are reported together; serial probes are then skipped
+and listed as unchecked. Error messages retain the role, port and failure stage;
+servo error replies are distinguished from missing valid responses.
 
 Run the discovery regression tests (no hardware access):
 

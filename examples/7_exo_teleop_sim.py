@@ -187,8 +187,12 @@ class TeleopSimulator:
         print("=== Exo + Glove Teleop Sim ===")
         validate_cfg(self.cfg)
         self.cfg = resolve_teleop_devices(self.cfg)
-        self._open_inputs()
-        self._open_sim()
+        try:
+            self._open_inputs()
+            self._open_sim()
+        except BaseException:
+            self.close()
+            raise
 
         assert self.arm_exo is not None
         assert self.glove is not None

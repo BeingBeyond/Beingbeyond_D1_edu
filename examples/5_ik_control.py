@@ -25,7 +25,7 @@ from beingbeyond_d1_edu_sdk.pin_kinematics import (
 )
 
 from utils import deg_list_to_rad, rad_list_to_deg
-from device_detection import resolve_head_arm
+from device_detection import resolve_head_arm, device_operation
 
 
 def main():
@@ -47,7 +47,8 @@ def main():
     kin = D1Kinematics(kin_cfg)
 
     # 2) Connect to real robot
-    robot = HeadArmRobot(urdf_path=urdf, dev=dev, baudrate=baudrate)
+    with device_operation("head_arm", dev, "controller initialization"):
+        robot = HeadArmRobot(urdf_path=urdf, dev=dev, baudrate=baudrate)
     try:
         joint_names = robot.joint_names
         n_joints = len(joint_names)

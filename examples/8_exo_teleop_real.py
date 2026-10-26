@@ -175,6 +175,7 @@ class TeleopRealCfg:
 
     loop_hz: float = 30.0
     visual_hz: float = 15.0
+    enable_camera: bool = True
     enable_visualization: bool = True
     dbg: bool = False
 
@@ -204,10 +205,10 @@ class TeleopReal:
         self.teleop[2:8] = np.deg2rad(np.asarray(cfg.arm_init_deg, dtype=np.float64))
         self.teleop[8:14] = np.asarray(cfg.hand_init_norm, dtype=np.float64)
 
-    def close(self) -> None:
+    def close(self, *, home: bool = True) -> None:
         try:
             if self.robot is not None:
-                self.robot.close()
+                self.robot.close(home=home, open_hand=home)
         except Exception:
             pass
         try:
@@ -240,6 +241,7 @@ class TeleopReal:
             hand_can=self.cfg.robot_hand_can,
             hand_baud=self.cfg.robot_hand_baud,
             vision_device=self.cfg.robot_vision_device,
+            enable_vision=self.cfg.enable_camera,
         )
         self.robot.__enter__()
         self.robot.hand.set_speed(speed=list(self.cfg.hand_speed))
@@ -306,9 +308,13 @@ class TeleopReal:
 
         validate_cfg(self.cfg)
         self.cfg = resolve_teleop_devices(self.cfg)
-        self._open_inputs()
-        self._open_robot()
-        self._move_to_initial_pose()
+        try:
+            self._open_inputs()
+            self._open_robot()
+            self._move_to_initial_pose()
+        except BaseException:
+            self.close(home=False)
+            raise
 
         print("[Info] Arm exo ids:", format_servo_ids(self.cfg.arm_exo_servo_ids))
         print("Start real teleop. Ctrl+C or q in the visualization window to exit.")
@@ -318,8 +324,9 @@ class TeleopReal:
         last_visual_t = 0.0
         last_visual_frame_t = time.time()
         visual_fps = 0.0
-        camera = self.robot.vision if self.cfg.enable_visualization else None
+        camera = self.robot.vision if self.cfg.enable_camera and self.cfg.enable_visualization else None
 
+        failed = False
         try:
             if camera is not None:
                 camera.start()
@@ -370,10 +377,13 @@ class TeleopReal:
                     time.sleep(sleep_s)
 
         except KeyboardInterrupt:
+            failed = True
             print("\nInterrupted by user (Ctrl+C).")
         except Exception as exc:
+            failed = True
             print(f"Error: {exc}")
             traceback.print_exc()
+            raise
         finally:
             try:
                 if camera is not None:
@@ -381,7 +391,7 @@ class TeleopReal:
                 cv2.destroyWindow("D1 teleop camera + tactile")
             except Exception:
                 pass
-            self.close()
+            self.close(home=not failed)
 
 
 def main() -> None:

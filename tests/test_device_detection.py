@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-EXAMPLES = Path(__file__).resolve().parents[1] / "examples"
+EXAMPLES = Path(os.environ.get("D1_EXAMPLES_DIR", str(Path(__file__).resolve().parents[1] / "examples"))).resolve()
 sys.path.insert(0, str(EXAMPLES))
 import device_detection as detection
 
@@ -44,6 +44,22 @@ class SerialStub:
 
 
 class ProtocolTests(unittest.TestCase):
+    def test_head_fault_is_not_reported_as_missing(self):
+        port = SerialStub()
+        def fault(command):
+            body = bytes((command[2], 2, 4))
+            port.pending = b"\xff\xff" + body + bytes((~sum(body) & 255,))
+        port.write = fault
+        with self.assertRaisesRegex(detection.DeviceDetectionError, "ID 11.*0x04.*present"):
+            detection._probe_head_arm(port)
+
+    def test_head_error_parser_rejects_query_echo_and_bad_checksum(self):
+        query = bytes((11, 4, 2, 5, 1))
+        echo = b"\xff\xff" + query + bytes((~sum(query) & 255,))
+        self.assertIsNone(detection._head_arm_error(echo, 11))
+        bad = response(11, 4)[:-1] + b"\x00"
+        self.assertIsNone(detection._head_arm_error(bad, 11))
+
     def test_head_reply_rejects_echo_wrong_id_error_and_bad_checksum(self):
         frame = response(11)
         self.assertTrue(detection._head_arm_reply(b"noise" + frame, 11))
@@ -129,6 +145,72 @@ class DiscoveryTests(unittest.TestCase):
                     detection.resolve_serial_ports({"head_arm": "auto"})
             head_probe.assert_not_called()
 
+    def test_wrong_role_error_includes_actual_candidate_port(self):
+        with patch.object(detection, "_serial_candidates", return_value={
+                "/dev/ttyACM7": SimpleNamespace(vid=0x1a86, pid=0x55d3)}), \
+                patch.object(detection, "_open_probe", side_effect=self.open_port), \
+                patch.object(detection, "_probe_glove", return_value=True):
+            with self.assertRaisesRegex(detection.DeviceDetectionError, "/dev/ttyACM7: identified as glove"):
+                detection.resolve_serial_ports({"head_arm": "auto"})
+
+    def test_unsupported_serial_is_listed_without_opening_it(self):
+        with self.assertRaisesRegex(detection.DeviceDetectionError, "/dev/ttyUSB8: USB 1234:5678 excluded"):
+            self.discover({"/dev/ttyUSB8": SimpleNamespace(vid=0x1234, pid=0x5678)}, {"exo": "auto"})
+        self.assertEqual(self.probes, [])
+
+    def test_explicit_override_is_verified_without_usb_filter(self):
+        with patch.object(detection, "_serial_candidates") as inventory, \
+                patch.object(detection, "_open_probe", side_effect=self.open_port), \
+                patch.object(detection, "_probe_exo", return_value=[]):
+            self.assertEqual(detection.resolve_serial_ports({"exo": "/dev/custom"}, verify_explicit=True),
+                             {"exo": "/dev/custom"})
+        inventory.assert_not_called()
+        self.assertEqual(self.probes, [("/dev/custom", 115200)])
+
+    def test_explicit_failure_keeps_role_port_stage_and_permission(self):
+        with patch.object(detection, "_open_probe", side_effect=PermissionError("permission denied")):
+            with self.assertRaisesRegex(detection.DeviceDetectionError, "exo port=/dev/custom stage=explicit serial verification.*permission denied"):
+                detection.resolve_serial_ports({"exo": "/dev/custom"}, verify_explicit=True)
+
+    def test_explicit_alias_conflict_fails_before_any_probe(self):
+        with patch.object(detection.os.path, "realpath", return_value="/dev/ttyUSB4"), \
+                patch.object(detection, "_serial_candidates") as inventory:
+            with self.assertRaisesRegex(detection.DeviceDetectionError, "/dev/ttyUSB4 -> exo, glove"):
+                detection.resolve_serial_ports({"exo": "/alias", "glove": "/dev/ttyUSB4"})
+        inventory.assert_not_called()
+
+    def test_passive_errors_are_aggregated_and_serial_skip_is_explicit(self):
+        with patch.object(detection, "resolve_can_iface", side_effect=detection.DeviceDetectionError("missing CAN")), \
+                patch.object(detection, "resolve_camera_device", side_effect=detection.DeviceDetectionError("missing camera")), \
+                patch.object(detection, "resolve_serial_ports") as probe:
+            with self.assertRaises(detection.DeviceDetectionError) as caught:
+                detection.resolve_devices(head_arm="auto", can_iface="auto", camera="auto", check_ready=True)
+        message = str(caught.exception)
+        self.assertIn("missing CAN", message)
+        self.assertIn("missing camera", message)
+        self.assertIn("serial verification skipped", message)
+        self.assertIn("head_arm=auto", message)
+        probe.assert_not_called()
+
+    def test_communication_failures_are_aggregated_before_serial_probes(self):
+        with patch.object(detection, "check_can", side_effect=OSError("bus unavailable")), \
+                patch.object(detection, "check_camera", side_effect=RuntimeError("capture failed")), \
+                patch.object(detection, "resolve_serial_ports") as probe:
+            with self.assertRaises(detection.DeviceDetectionError) as caught:
+                detection.resolve_devices(head_arm="auto", can_iface="can7", camera="/dev/video8", check_ready=True)
+        self.assertIn("can_iface port=can7 stage=communication check: bus unavailable", str(caught.exception))
+        self.assertIn("camera port=/dev/video8 stage=communication check: capture failed", str(caught.exception))
+        probe.assert_not_called()
+
+    def test_readiness_forwards_hand_side_bitrate_and_explicit_verification(self):
+        with patch.object(detection, "check_can") as can_check, \
+                patch.object(detection, "resolve_serial_ports", return_value={"head_arm": "/dev/head"}) as serial_probe:
+            devices = detection.resolve_devices(head_arm="/dev/head", can_iface="can7", hand_type="left",
+                                                hand_baud=500000, check_ready=True)
+        can_check.assert_called_once_with("can7", "left", 500000)
+        self.assertTrue(serial_probe.call_args[1]["verify_explicit"])
+        self.assertEqual(devices["head_arm"], "/dev/head")
+
     def test_two_matching_exos_are_ambiguous(self):
         info = SimpleNamespace(vid=0x1a86, pid=0x7523)
         with self.assertRaisesRegex(detection.DeviceDetectionError, "ambiguous"):
@@ -156,11 +238,6 @@ class DiscoveryTests(unittest.TestCase):
                 patch.object(detection, "_probe_head_arm", return_value=[26]):
             with self.assertRaisesRegex(detection.DeviceDetectionError, "26"):
                 detection.resolve_serial_ports({"head_arm": "auto"})
-
-    def test_explicit_ports_are_not_probed(self):
-        with patch.object(detection, "_open_probe") as probe:
-            self.assertEqual(detection.resolve_serial_ports({"head_arm": "/manual/head"}), {"head_arm": "/manual/head"})
-            probe.assert_not_called()
 
     def test_duplicate_explicit_paths_are_rejected(self):
         with self.assertRaisesRegex(detection.DeviceDetectionError, "multiple roles"):
@@ -194,10 +271,6 @@ class DiscoveryTests(unittest.TestCase):
             with self.assertRaises(detection.DeviceDetectionError):
                 detection.resolve_devices(head_arm="auto", can_iface="auto")
             serial_probe.assert_not_called()
-
-    def test_manual_can_and_camera_overrides(self):
-        self.assertEqual(detection.resolve_can_iface("can9"), "can9")
-        self.assertEqual(detection.resolve_camera_device("/dev/video9"), "/dev/video9")
 
 
 class PeripheralTests(unittest.TestCase):
@@ -259,6 +332,19 @@ class PeripheralTests(unittest.TestCase):
                 detection.check_can("can7")
             connect.assert_not_called()
             self.assertEqual(command.call_args[0][0], ["ip", "-json", "-details", "link", "show", "dev", "can7"])
+
+    def test_can_bus_off_is_rejected_before_sending(self):
+        status = '[{"flags":["UP"],"linkinfo":{"info_data":{"state":"BUS-OFF","bittiming":{"bitrate":1000000}}}}]'
+        with patch.object(detection.subprocess, "run", return_value=SimpleNamespace(stdout=status)), \
+                patch.object(detection.socket, "socket") as connect:
+            with self.assertRaisesRegex(detection.DeviceDetectionError, "hand CAN port=can7.*BUS-OFF"):
+                detection.check_can("can7")
+        connect.assert_not_called()
+
+    def test_missing_ip_command_keeps_interface_and_stage(self):
+        with patch.object(detection.subprocess, "run", side_effect=FileNotFoundError("ip not installed")):
+            with self.assertRaisesRegex(detection.DeviceDetectionError, "hand CAN port=can7 stage=status check.*ip not installed"):
+                detection.check_can("can7")
 
 
 if __name__ == "__main__":

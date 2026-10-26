@@ -11,7 +11,7 @@ This script:
 
 Use this example to verify that:
     - The hand is wired correctly
-    - The CAN interface is configured (e.g. 'can0' at 1 Mbps)
+    - The confirmed PCAN interface is configured at 1 Mbps before startup
     - The hand responds correctly to high-level normalized joint commands.
     - The hand motion behavior under different speed and torque settings.
     - The tactile matrix frames are received and decoded.
@@ -22,7 +22,7 @@ import cv2
 import numpy as np
 
 from beingbeyond_d1_edu_sdk.hand import DexHand
-from device_detection import resolve_can_iface
+from device_detection import resolve_devices, device_operation
 
 
 FINGER_NAMES = ["thumb", "index", "middle", "ring", "little"]
@@ -133,7 +133,9 @@ def main():
     print("\033[91mWARNING: Always keep the physical emergency stop button within reach,\033[0m")
     print("\033[91m         and press it immediately if the robot motion looks unsafe.\033[0m\n")
 
-    right_hand = DexHand(hand_type="right", can_iface=resolve_can_iface("auto"))
+    can_iface = resolve_devices(can_iface="auto", check_ready=True)["can_iface"]
+    with device_operation("hand CAN", can_iface, "controller initialization"):
+        right_hand = DexHand(hand_type="right", can_iface=can_iface)
 
     try:
         right_hand.gesture_dance(duration_s=3, m=0.1, interval_s=0.1)

@@ -535,7 +535,8 @@ def main() -> None:
     head_arm_cfg = HeadArmCfg()
     hand_cfg = HandCfg()
     devices = resolve_devices(head_arm=head_arm_cfg.dev, can_iface=hand_cfg.can_iface,
-                              camera=stereo_cfg.device, head_arm_baud=head_arm_cfg.baudrate)
+                              camera=stereo_cfg.device, head_arm_baud=head_arm_cfg.baudrate,
+                              check_ready=True, hand_type=hand_cfg.hand_type, hand_baud=hand_cfg.baudrate)
     head_arm_cfg = replace(head_arm_cfg, dev=devices["head_arm"])
     hand_cfg = replace(hand_cfg, can_iface=devices["can_iface"])
     stereo_cfg = replace(stereo_cfg, device=devices["camera"])

@@ -37,6 +37,25 @@ class DeviceDetectionError(RuntimeError):
     pass
 
 
+@contextmanager
+def device_operation(role, device, stage):
+    """Keep the role, selected port and original cause on runtime failures."""
+    try:
+        yield
+    except Exception as exc:
+        hint = ""
+        if isinstance(exc, PermissionError):
+            hint = " Check the current user's dialout/video permissions."
+        elif isinstance(exc, FileNotFoundError):
+            hint = " Check USB enumeration, the device path and installed tools."
+        cause = str(exc)
+        if isinstance(exc, subprocess.CalledProcessError) and exc.stderr:
+            cause += ": " + exc.stderr.strip()
+        raise DeviceDetectionError(
+            "[device] {} port={} stage={}: {}{}".format(role, device, stage, cause, hint)
+        ) from exc
+
+
 def _unique(role, candidates, details=()):
     if len(candidates) != 1:
         reason = "no verified device" if not candidates else "ambiguous devices: " + ", ".join(candidates)
@@ -58,7 +77,11 @@ def _port_users(device):
     """Best-effort detection of even non-exclusive legacy SDK serial users."""
     target = os.stat(device)
     users = []
-    for process in Path("/proc").iterdir():
+    try:
+        processes = list(Path("/proc").iterdir())
+    except OSError:
+        return users
+    for process in processes:
         if not process.name.isdigit():
             continue
         try:
@@ -132,6 +155,19 @@ def _head_arm_reply(data, servo_id):
     return False
 
 
+def _head_arm_error(data, servo_id):
+    """Accept a servo error only from a complete, checksum-valid status packet."""
+    for start in range(max(0, len(data) - 5)):
+        if data[start:start + 3] != b"\xff\xff" + bytes((servo_id,)):
+            continue
+        length = data[start + 3]
+        frame = data[start:start + length + 4]
+        if (length in (2, 3) and len(frame) == length + 4
+                and sum(frame[2:]) & 0xFF == 0xFF and frame[4]):
+            return frame[4]
+    return None
+
+
 def _probe_head_arm(port):
     missing = []
     for servo_id in HEAD_ARM_IDS:
@@ -145,6 +181,12 @@ def _probe_head_arm(port):
             deadline = time.monotonic() + 0.12
             while time.monotonic() < deadline:
                 data.extend(port.read(32))
+                error = _head_arm_error(data, servo_id)
+                if error is not None:
+                    raise DeviceDetectionError(
+                        "head/arm servo ID {} replied with error status 0x{:02x}; "
+                        "the servo is present but reports a fault".format(servo_id, error)
+                    )
                 if _head_arm_reply(data, servo_id):
                     matched = True
                     break
@@ -178,8 +220,9 @@ def _probe_exo(port, servo_ids):
     return missing
 
 
-def resolve_serial_ports(requests, baudrates=None, exo_servo_ids=(1, 2, 3, 4, 5, 6)):
-    """Resolve requested roles together; explicit paths bypass protocol discovery.
+def resolve_serial_ports(requests, baudrates=None, exo_servo_ids=(1, 2, 3, 4, 5, 6),
+                         verify_explicit=False):
+    """Resolve roles together; optionally verify explicit paths without USB filters.
 
     A busy/unreadable candidate is an error even if another candidate matches:
     the inaccessible device could otherwise hide a second matching controller.
@@ -191,12 +234,24 @@ def resolve_serial_ports(requests, baudrates=None, exo_servo_ids=(1, 2, 3, 4, 5,
     resolved = {role: path for role, path in requests.items() if path != "auto"}
     automatic = set(requests) - set(resolved)
     occupied_paths = {os.path.realpath(path) for path in resolved.values()}
+    assignments = {}
+    for role, path in resolved.items():
+        assignments.setdefault(os.path.realpath(path), []).append(role)
+    duplicates = ["{} -> {}".format(path, ", ".join(roles))
+                  for path, roles in assignments.items() if len(roles) > 1]
+    if duplicates:
+        raise DeviceDetectionError("The same serial port was assigned to multiple roles: " + "; ".join(duplicates))
     matches = {role: [] for role in automatic}
     details = {role: [] for role in automatic}
     blocked = {role: False for role in automatic}
-    for device, info in sorted(_serial_candidates().items()):
+    candidates = _serial_candidates() if automatic else {}
+    for device, info in sorted(candidates.items()):
         roles = {role for role in automatic if (info.vid, info.pid) in SERIAL_USB_IDS[role]}
         if not roles or device in occupied_paths:
+            for role in automatic:
+                identity = "{:04x}:{:04x}".format(info.vid, info.pid) if info.vid is not None and info.pid is not None else "unknown"
+                reason = "reserved by an explicit role" if device in occupied_paths else "USB identity does not match this role"
+                details[role].append("{}: USB {} excluded: {}".format(device, identity, reason))
             continue
         try:
             if roles & {"head_arm", "glove"}:
@@ -207,13 +262,15 @@ def resolve_serial_ports(requests, baudrates=None, exo_servo_ids=(1, 2, 3, 4, 5,
                     if is_glove:
                         if "glove" in roles:
                             matches["glove"].append(device)
+                        if "head_arm" in roles:
+                            details["head_arm"].append("{}: identified as glove; not a head/arm controller".format(device))
                     elif "head_arm" in roles:
                         port.baudrate = rates["head_arm"]
                         missing = _probe_head_arm(port)
                         if not missing:
                             matches["head_arm"].append(device)
                         else:
-                            details["head_arm"].append("{}: head/arm IDs missing: {}".format(device, missing))
+                            details["head_arm"].append("{}: no valid head/arm reply for IDs {}; check power, baudrate, wiring or corrupt replies".format(device, missing))
                     if not is_glove and "glove" in roles:
                         details["glove"].append("{}: no consecutive valid ANGLES frames".format(device))
             if "exo" in roles:
@@ -226,12 +283,36 @@ def resolve_serial_ports(requests, baudrates=None, exo_servo_ids=(1, 2, 3, 4, 5,
         except (OSError, serial.SerialException, DeviceDetectionError) as exc:
             for role in roles:
                 blocked[role] = True
-                details[role].append("{}: {}".format(device, exc))
+                details[role].append("{} at {} baud: {}".format(device, rates[role], exc))
     errors = []
+    if verify_explicit:
+        for role, device in resolved.items():
+            try:
+                with device_operation(role, device, "explicit serial verification"):
+                    with _open_probe(device, rates[role]) as port:
+                        if role == "glove":
+                            if not _probe_glove(port):
+                                raise DeviceDetectionError("no consecutive valid ANGLES frames")
+                        elif role == "head_arm":
+                            port.baudrate = rates["glove"]
+                            if _probe_glove(port):
+                                raise DeviceDetectionError("identified as glove; not a head/arm controller")
+                            port.baudrate = rates[role]
+                            missing = _probe_head_arm(port)
+                            if missing:
+                                raise DeviceDetectionError("no valid head/arm reply for IDs {}".format(missing))
+                        else:
+                            missing = _probe_exo(port, exo_servo_ids)
+                            if missing:
+                                raise DeviceDetectionError("exo IDs missing/invalid: {}".format(missing))
+            except DeviceDetectionError as exc:
+                errors.append(str(exc))
     for role in sorted(automatic):
         try:
             if blocked[role]:
-                raise DeviceDetectionError("[auto] {}: a candidate is busy or inaccessible.\n  {}".format(role, "\n  ".join(details[role])))
+                raise DeviceDetectionError("[auto] {} stage=serial verification: a candidate could not be verified.\n  {}".format(role, "\n  ".join(details[role])))
+            if not candidates:
+                details[role].append("serial inventory is empty; check USB connection and driver enumeration")
             resolved[role] = _unique(role, matches[role], details[role])
         except DeviceDetectionError as exc:
             errors.append(str(exc))
@@ -244,7 +325,9 @@ def resolve_serial_ports(requests, baudrates=None, exo_servo_ids=(1, 2, 3, 4, 5,
 
 
 def resolve_head_arm(port="auto", baudrate=1_000_000):
-    return resolve_serial_ports({"head_arm": port}, {"head_arm": baudrate})["head_arm"]
+    with device_operation("head_arm", port, "serial verification"):
+        return resolve_serial_ports({"head_arm": port}, {"head_arm": baudrate},
+                                    verify_explicit=True)["head_arm"]
 
 
 def _usb_id(sys_device):
@@ -262,13 +345,20 @@ def resolve_can_iface(iface="auto"):
     if iface != "auto":
         return iface
     candidates = []
+    details = []
     for path in sorted(Path("/sys/class/net").glob("*")):
         try:
-            if (path / "type").read_text().strip() == "280" and _usb_id(path / "device") in CAN_USB_IDS:
-                candidates.append(path.name)
-        except OSError:
-            continue
-    return _unique("hand CAN", candidates)
+            if (path / "type").read_text().strip() == "280":
+                identity = _usb_id(path / "device")
+                if identity in CAN_USB_IDS:
+                    candidates.append(path.name)
+                else:
+                    details.append("{}: excluded non-PCAN USB identity {} (possibly a built-in CAN controller)".format(path.name, identity))
+        except OSError as exc:
+            details.append("{}: cannot inspect interface: {}".format(path.name, exc))
+    if not candidates:
+        details.append("expected USB 0c72:000c SocketCAN adapter; check lsusb and PCAN driver loading")
+    return _unique("hand CAN", candidates, details)
 
 
 def resolve_camera_device(device="auto"):
@@ -278,44 +368,91 @@ def resolve_camera_device(device="auto"):
     for path in sorted(Path("/dev/v4l/by-id").glob("*video-index0")):
         links[os.path.realpath(str(path))] = str(path)
     candidates = []
+    details = []
     for path in sorted(Path("/sys/class/video4linux").glob("video*")):
         try:
-            if (path / "index").read_text().strip() == "0" and _usb_id(path / "device") in CAMERA_USB_IDS:
-                node = "/dev/" + path.name
+            index = (path / "index").read_text().strip()
+            identity = _usb_id(path / "device")
+            node = "/dev/" + path.name
+            if index == "0" and identity in CAMERA_USB_IDS:
                 candidates.append(links.get(os.path.realpath(node), node))
-        except OSError:
-            continue
-    return _unique("stereo camera", candidates)
+            else:
+                details.append("{}: excluded USB identity {}, video index {}".format(node, identity, index))
+        except OSError as exc:
+            details.append("{}: cannot inspect video device: {}".format(path.name, exc))
+    if not candidates:
+        details.append("expected USB 15aa:1955 video index 0; check lsusb and /dev/v4l/by-id/")
+    return _unique("stereo camera", candidates, details)
 
 
 def resolve_devices(head_arm=None, exo=None, glove=None, can_iface=None, camera=None,
                     head_arm_baud=1_000_000, exo_baud=115200, glove_baud=115200,
-                    exo_servo_ids=(1, 2, 3, 4, 5, 6)):
-    """Resolve every requested device before any motion-producing SDK setup."""
+                    exo_servo_ids=(1, 2, 3, 4, 5, 6), check_ready=False,
+                    hand_type="right", hand_baud=1_000_000):
+    """Resolve devices and optionally verify communication before controller setup.
+
+    Readiness checks never configure CAN: it must already be UP at hand_baud.
+    Passive failures are collected together; serial probes are then skipped.
+    """
     result = {}
-    # Resolve passive devices first so missing cameras/CAN never trigger probes.
-    if can_iface is not None:
-        result["can_iface"] = resolve_can_iface(can_iface)
-    if camera is not None:
-        result["camera"] = resolve_camera_device(camera)
+    errors = []
+    for role, device, resolver in (("can_iface", can_iface, resolve_can_iface),
+                                   ("camera", camera, resolve_camera_device)):
+        if device is None:
+            continue
+        try:
+            with device_operation(role, device, "discovery"):
+                result[role] = resolver(device)
+        except DeviceDetectionError as exc:
+            errors.append(str(exc))
+    if check_ready:
+        errors.extend(_check_peripherals(result, hand_type, hand_baud))
     requests = {role: value for role, value in
                 (("head_arm", head_arm), ("exo", exo), ("glove", glove)) if value is not None}
+    if errors:
+        if requests:
+            errors.append("[check] serial verification skipped because peripheral checks failed: " +
+                          ", ".join("{}={}".format(role, path) for role, path in requests.items()))
+        raise DeviceDetectionError("\n".join(errors))
     if requests:
-        result.update(resolve_serial_ports(requests,
-                      {"head_arm": head_arm_baud, "exo": exo_baud, "glove": glove_baud}, exo_servo_ids))
+        with device_operation("serial roles", str(requests), "discovery/verification"):
+            result.update(resolve_serial_ports(requests,
+                          {"head_arm": head_arm_baud, "exo": exo_baud, "glove": glove_baud},
+                          exo_servo_ids, verify_explicit=check_ready))
     return result
 
 
+def _check_peripherals(devices, hand_type, hand_baud):
+    errors = []
+    for role, device in devices.items():
+        try:
+            if role == "can_iface":
+                check_can(device, hand_type, hand_baud)
+            elif role == "camera":
+                check_camera(device)
+        except Exception as exc:
+            errors.append("[device] {} port={} stage=communication check: {}".format(role, device, exc))
+    return errors
+
+
 def check_can(iface, hand_type="right", bitrate=1_000_000):
+    with device_operation("hand CAN", iface, "status check"):
+        _check_can(iface, hand_type, bitrate)
+
+
+def _check_can(iface, hand_type, bitrate):
     """Read fresh hand joint status on an already configured bus; never set it up."""
     if hand_type not in ("left", "right"):
         raise ValueError("hand_type must be left or right")
     status = subprocess.run(["ip", "-json", "-details", "link", "show", "dev", iface],
-                            check=True, stdout=subprocess.PIPE, text=True, timeout=2)
+                            check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=2)
     link = json.loads(status.stdout)[0]
     bus = link.get("linkinfo", {}).get("info_data", {})
     if "UP" not in link.get("flags", []) or bus.get("bittiming", {}).get("bitrate") != bitrate:
-        raise DeviceDetectionError("{} must already be UP at {} bit/s for this read-only check".format(iface, bitrate))
+        raise DeviceDetectionError("{} must already be UP at {} bit/s for this read-only check; "
+                                   "configure the confirmed PCAN interface first (see lib/pcan/README.md)".format(iface, bitrate))
+    if bus.get("state") in ("BUS-OFF", "STOPPED", "SLEEPING"):
+        raise DeviceDetectionError("{} CAN state is {}; check wiring and recover the bus".format(iface, bus["state"]))
     hand_id = 0x27 if hand_type == "right" else 0x28
     with socket.socket(socket.PF_CAN, socket.SOCK_RAW, socket.CAN_RAW) as bus_socket:
         bus_socket.setsockopt(socket.SOL_CAN_RAW, socket.CAN_RAW_FILTER,
@@ -339,6 +476,11 @@ def check_can(iface, hand_type="right", bitrate=1_000_000):
 
 
 def check_camera(device):
+    with device_operation("stereo camera", device, "capture check"):
+        _check_camera(device)
+
+
+def _check_camera(device):
     """Capture one stereo-sized frame, without any SDK or robot initialization."""
     import cv2
 
@@ -366,6 +508,7 @@ def main():
     parser.add_argument("--check", action="store_true", help="Also read CAN status and capture a camera frame; no robot motion")
     parser.add_argument("--roles", nargs="+", default=["head_arm", "exo", "glove", "can", "camera"],
                         choices=["head_arm", "exo", "glove", "can", "camera"])
+    parser.add_argument("--hand-type", choices=["left", "right"], default="right")
     args = parser.parse_args()
     try:
         if args.list:
@@ -378,12 +521,7 @@ def main():
             requests["can_iface"] = "auto"
         if "camera" in roles:
             requests["camera"] = "auto"
-        devices = resolve_devices(**requests)
-        if args.check:
-            if "can_iface" in devices:
-                check_can(devices["can_iface"])
-            if "camera" in devices:
-                check_camera(devices["camera"])
+        resolve_devices(**requests, check_ready=args.check, hand_type=args.hand_type)
         print("[check] Requested devices resolved successfully; no robot controller was created.")
         return 0
     except (DeviceDetectionError, OSError, subprocess.SubprocessError) as exc:

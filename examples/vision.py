@@ -7,7 +7,7 @@ This module defines StereoRGBCamera, which:
   - Builds a single RGB display view from both eyes or either eye
 """
 import cv2
-from device_detection import resolve_camera_device
+from device_detection import resolve_camera_device, device_operation
 
 
 DEFAULT_DEVICE = "auto"
@@ -43,8 +43,10 @@ class StereoRGBCamera:
         capture_width = self.single_width * 2
         capture_height = self.single_height
 
-        cap = cv2.VideoCapture(self.device, cv2.CAP_V4L2)
+        with device_operation("stereo camera", self.device, "open"):
+            cap = cv2.VideoCapture(self.device, cv2.CAP_V4L2)
         if not cap.isOpened():
+            cap.release()
             raise RuntimeError(
                 f"Could not open camera: {self.device}. "
                 "Check /dev/video* and /dev/v4l/by-id/, then set device "
@@ -52,14 +54,18 @@ class StereoRGBCamera:
                 "D1Robot."
             )
 
-        if self.fourcc.upper() != "NONE":
-            if len(self.fourcc) != 4:
-                raise ValueError("fourcc must have 4 characters, e.g. MJPG or YUYV.")
-            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*self.fourcc))
-
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, capture_width)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, capture_height)
-        cap.set(cv2.CAP_PROP_FPS, self.fps)
+        try:
+            with device_operation("stereo camera", self.device, "configure capture"):
+                if self.fourcc.upper() != "NONE":
+                    if len(self.fourcc) != 4:
+                        raise ValueError("fourcc must have 4 characters, e.g. MJPG or YUYV.")
+                    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*self.fourcc))
+                cap.set(cv2.CAP_PROP_FRAME_WIDTH, capture_width)
+                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, capture_height)
+                cap.set(cv2.CAP_PROP_FPS, self.fps)
+        except BaseException:
+            cap.release()
+            raise
         self.cap = cap
 
         print("============================================================")
@@ -84,15 +90,16 @@ class StereoRGBCamera:
         if self.cap is None:
             self.start()
 
-        ret, frame = self.cap.read()
+        with device_operation("stereo camera", self.device, "read frame"):
+            ret, frame = self.cap.read()
         if not ret or frame is None:
-            raise RuntimeError("Failed to read frame.")
+            raise RuntimeError(f"stereo camera port={self.device} stage=read frame: Failed to read frame.")
 
         frame_h, frame_w = frame.shape[:2]
         expected_w = 2 * self.single_width
         if frame_h < self.single_height or frame_w < expected_w:
             raise RuntimeError(
-                f"Frame size is too small. Got {frame_w}x{frame_h}, "
+                f"stereo camera port={self.device} stage=read frame: Frame size is too small. Got {frame_w}x{frame_h}, "
                 f"expected at least {expected_w}x{self.single_height}."
             )
 
