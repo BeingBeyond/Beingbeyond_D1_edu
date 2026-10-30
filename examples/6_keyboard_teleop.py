@@ -25,6 +25,13 @@ Usage:
 """
 
 
+from diagnostics import install_error_hook, report_error, require_display
+
+if __name__ == "__main__":
+    install_error_hook()
+
+from device_detection import device_operation
+
 import math
 import sys
 import time
@@ -270,8 +277,8 @@ def solve_ik_safe(
 
 
 def main() -> int:
-    print("\033[91mWARNING: Always keep the physical emergency stop button within reach.\033[0m")
-    print("\033[91m         Press it immediately if the robot motion looks unsafe.\033[0m\n")
+    print("\033[91m警告：请始终保持实体急停按钮可触及 / WARNING: Always keep the physical emergency stop button within reach.\033[0m")
+    print("\033[91m         运动异常时立即按下急停 / Press it immediately if the robot motion looks unsafe.\033[0m\n")
 
     urdf = get_default_urdf_path()
     vision_device = "auto"
@@ -301,15 +308,18 @@ def main() -> int:
                 0.0, -60.0, 60.0, 0.0, 0.0, 0.0,
             ]
             q_init_rad = deg_list_to_rad(q_init_deg)
-            robot.head_arm.set_positions(q_init_rad)
-            robot.head_arm.wait_until_reached(
-                q_init_rad,
-                active_joint_indices=range(len(q_init_rad)),
-            )
+            with device_operation('head_arm', robot.devices["head_arm"], 'set_positions'):
+                robot.head_arm.set_positions(q_init_rad)
+            with device_operation('head_arm', robot.devices["head_arm"], 'wait_until_reached'):
+                robot.head_arm.wait_until_reached(
+                    q_init_rad,
+                    active_joint_indices=range(len(q_init_rad)),
+                )
             time.sleep(0.5)
 
 
-            q_headarm = np.asarray(robot.head_arm.get_positions(), dtype=float)
+            with device_operation('head_arm', robot.devices["head_arm"], 'get_positions'):
+                q_headarm = np.asarray(robot.head_arm.get_positions(), dtype=float)
             q_head, q_arm = kin.split_q(q_headarm)
 
 
@@ -350,7 +360,7 @@ def main() -> int:
                                 "cmd [w/s/a/d/z/x/u/o/i/k/j/l/space/r/h/q] (Enter to skip): "
                             )
                         except EOFError:
-                            print("EOF on stdin, quitting teleop.")
+                            print("标准输入已关闭，正在退出遥操作；请在交互式终端运行 / EOF on stdin, quitting teleop.")
                             break
                         ch = line[0] if line else None
 

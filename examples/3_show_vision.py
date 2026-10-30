@@ -8,6 +8,13 @@ This script:
 
 Press 'q' in the OpenCV window to exit.
 """
+from diagnostics import install_error_hook, report_error, require_display
+
+if __name__ == "__main__":
+    install_error_hook()
+
+from device_detection import device_operation
+
 import time
 
 import cv2
@@ -16,6 +23,7 @@ from vision import StereoRGBCamera
 
 
 def main():
+    require_display()
     device = "auto"
     single_width = 640
     single_height = 480
@@ -47,10 +55,11 @@ def main():
             try:
                 rgb_view = camera.read_view()
             except RuntimeError as exc:
-                print("[ERROR]", exc)
+                report_error(exc)
                 break
 
-            cv2.imshow(window_name, camera.draw_info(rgb_view, fps))
+            with device_operation("display", "OpenCV", "visualization"):
+                cv2.imshow(window_name, camera.draw_info(rgb_view, fps))
 
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 break

@@ -1,3 +1,10 @@
+from diagnostics import install_error_hook, report_error, require_display, warn_exo_readings
+
+if __name__ == "__main__":
+    install_error_hook()
+
+from device_detection import device_operation
+
 from dataclasses import dataclass, field
 import time
 import traceback
@@ -56,13 +63,14 @@ def tactile_mat_to_bgr(mat, label, cell_size=16, vmin=0, vmax=255):
     return overlay_text(color, [label], x=7, y=18, dy=16, scale=0.48)
 
 
-def build_tactile_panel(hand, wait_complete=False, timeout=0.01):
-    thumb, index, middle, ring, little, ts = hand.read_matrix_touch_4x10(
-        request=True,
-        wait_complete=wait_complete,
-        timeout=timeout,
-        poll_interval=0.001,
-    )
+def build_tactile_panel(hand, can_iface, wait_complete=False, timeout=0.01):
+    with device_operation("hand CAN", can_iface, "tactile read"):
+        thumb, index, middle, ring, little, ts = hand.read_matrix_touch_4x10(
+            request=True,
+            wait_complete=wait_complete,
+            timeout=timeout,
+            poll_interval=0.001,
+        )
     mats = {
         "thumb": thumb,
         "index": index,
@@ -125,10 +133,10 @@ def center_on_canvas(img, width, height, fill=(0, 0, 0)):
     return canvas
 
 
-def build_combined_view(camera, hand, fps):
+def build_combined_view(camera, hand, fps, can_iface):
     rgb_view = camera.read_view()
     rgb_view = camera.draw_info(rgb_view, fps)
-    tactile = build_tactile_panel(hand, wait_complete=False, timeout=0.01)
+    tactile = build_tactile_panel(hand, can_iface, wait_complete=False, timeout=0.01)
 
     rgb_view = resize_to_height(rgb_view, 360)
     tactile_band = center_on_canvas(tactile, rgb_view.shape[1], 230, fill=(10, 10, 10))
@@ -190,7 +198,7 @@ def validate_cfg(cfg: TeleopRealCfg) -> None:
         ("hand_speed", cfg.hand_speed, 6),
     ):
         if len(values) != n:
-            raise ValueError(f"{name} must contain {n} values")
+            raise ValueError(f"配置项数值数量错误，请修改对应列表 / {name} must contain {n} values")
 
 
 class TeleopReal:
@@ -213,23 +221,29 @@ class TeleopReal:
             pass
         try:
             if self.glove is not None:
-                self.glove.close()
-        except Exception:
-            pass
+                with device_operation('glove', self.cfg.glove_port, 'close'):
+                    self.glove.close()
+        except Exception as exc:
+            report_error(exc, role="glove", device=self.cfg.glove_port, stage="close")
         try:
             if self.arm_exo is not None:
-                self.arm_exo.close()
-        except Exception:
-            pass
+                with device_operation('exo', self.cfg.arm_exo_port, 'close'):
+                    self.arm_exo.close()
+        except Exception as exc:
+            report_error(exc, role="exo", device=self.cfg.arm_exo_port, stage="close")
 
     def _open_inputs(self) -> None:
-        self.arm_exo = ExoDriver(build_arm_exo_cfg(self.cfg))
-        self.arm_exo.open()
+        with device_operation('exo', self.cfg.arm_exo_port, 'controller initialization'):
+            self.arm_exo = ExoDriver(build_arm_exo_cfg(self.cfg))
+        with device_operation('exo', self.cfg.arm_exo_port, 'open'):
+            self.arm_exo.open()
         if self.cfg.release_arm_exo_torque_on_start:
             print("[Info] Releasing arm exo torque.")
-            self.arm_exo.release_torque()
+            with device_operation('exo', self.cfg.arm_exo_port, 'release_torque'):
+                self.arm_exo.release_torque()
 
-        self.glove = GloveReader(build_glove_cfg(self.cfg))
+        with device_operation('glove', self.cfg.glove_port, 'controller initialization'):
+            self.glove = GloveReader(build_glove_cfg(self.cfg))
         self.arm_zero_offsets_deg = calibrate_arm_exo_zero(self.arm_exo, self.cfg)
 
     def _open_robot(self) -> None:
@@ -244,26 +258,30 @@ class TeleopReal:
             enable_vision=self.cfg.enable_camera,
         )
         self.robot.__enter__()
-        self.robot.hand.set_speed(speed=list(self.cfg.hand_speed))
+        with device_operation('hand CAN', self.robot.devices["can_iface"], 'set_speed'):
+            self.robot.hand.set_speed(speed=list(self.cfg.hand_speed))
 
     def _move_to_initial_pose(self) -> None:
         assert self.robot is not None
         q_headarm = deg_list_to_rad(self.cfg.head_deg + self.cfg.arm_init_deg)
         self.robot.set_q(q_headarm + list(self.cfg.hand_init_norm))
-        self.robot.head_arm.wait_until_reached(
-            q_headarm,
-            active_joint_indices=range(8),
-            pos_tol_deg=5.0,
-            vel_tol_deg_s=20.0,
-            timeout_s=5.0,
-        )
+        with device_operation('head_arm', self.robot.devices["head_arm"], 'wait_until_reached'):
+            self.robot.head_arm.wait_until_reached(
+                q_headarm,
+                active_joint_indices=range(8),
+                pos_tol_deg=5.0,
+                vel_tol_deg_s=20.0,
+                timeout_s=5.0,
+            )
 
     def _read_arm(self) -> np.ndarray:
         assert self.arm_exo is not None
         assert self.arm_zero_offsets_deg is not None
 
-        frame = self.arm_exo.read_frame()
+        with device_operation('exo', self.cfg.arm_exo_port, 'read_frame'):
+            frame = self.arm_exo.read_frame()
         valid = [read.ok and read.angle_deg is not None for read in frame.reads]
+        warn_exo_readings(valid, self.cfg.arm_exo_servo_ids, self.cfg.arm_exo_port)
         if sum(valid) < self.cfg.arm_min_valid:
             return self.teleop[2:8].copy()
 
@@ -288,7 +306,8 @@ class TeleopReal:
 
     def _read_hand(self) -> np.ndarray:
         assert self.glove is not None
-        return glove_norm_to_real_hand(self.glove.get_norm_values())
+        with device_operation('glove', self.cfg.glove_port, 'get_norm_values'):
+            return glove_norm_to_real_hand(self.glove.get_norm_values())
 
     def _build_teleop(self) -> np.ndarray:
         x = self.teleop.copy()
@@ -303,9 +322,11 @@ class TeleopReal:
 
     def run(self) -> None:
         print("=== Exo + Glove Teleop Real ===")
-        print("\033[91mWARNING: Always keep the physical emergency stop button within reach.\033[0m")
-        print("\033[91m         Press it immediately if the robot motion looks unsafe.\033[0m\n")
+        print("\033[91m警告：请始终保持实体急停按钮可触及 / WARNING: Always keep the physical emergency stop button within reach.\033[0m")
+        print("\033[91m         运动异常时立即按下急停 / Press it immediately if the robot motion looks unsafe.\033[0m\n")
 
+        if self.cfg.enable_camera and self.cfg.enable_visualization:
+            require_display()
         validate_cfg(self.cfg)
         self.cfg = resolve_teleop_devices(self.cfg)
         try:
@@ -349,15 +370,15 @@ class TeleopReal:
                         )
 
                     try:
-                        cv2.imshow(
-                            "D1 teleop camera + tactile",
-                            build_combined_view(camera, self.robot.hand, visual_fps),
-                        )
+                        combined_view = build_combined_view(camera, self.robot.hand, visual_fps, self.cfg.robot_hand_can)
+                        with device_operation("display", "OpenCV", "visualization"):
+                            cv2.imshow("D1 teleop camera + tactile", combined_view)
                         if cv2.waitKey(1) & 0xFF == ord("q"):
                             print("\nInterrupted by user (q).")
                             break
                     except Exception as exc:
-                        print(f"[Visualization] disabled after error: {exc}")
+                        print("[Visualization] 可视化已因错误关闭，遥操作继续运行 / Visualization disabled after error; teleoperation continues.")
+                        report_error(exc)
                         traceback.print_exc()
                         try:
                             camera.stop()
@@ -381,7 +402,7 @@ class TeleopReal:
             print("\nInterrupted by user (Ctrl+C).")
         except Exception as exc:
             failed = True
-            print(f"Error: {exc}")
+            report_error(exc)
             traceback.print_exc()
             raise
         finally:

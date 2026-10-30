@@ -9,6 +9,13 @@ Pipeline:
 Press q in the OpenCV camera window, or close the Isaac Gym viewer, to exit.
 """
 
+from diagnostics import install_error_hook, report_error, require_display
+
+if __name__ == "__main__":
+    install_error_hook()
+
+from device_detection import device_operation
+
 import importlib
 import os
 import sys
@@ -195,18 +202,18 @@ def create_sim(gym, cfg: SimCfg) -> gymapi.Sim:
 
     sim_params.use_gpu_pipeline = cfg.use_gpu_pipeline
     if cfg.use_gpu_pipeline:
-        print("WARNING: Forcing CPU pipeline.")
+        print("警告：当前示例强制使用 CPU 仿真管线 / WARNING: Forcing CPU pipeline.")
 
     sim = gym.create_sim(cfg.compute_device_id, cfg.graphics_device_id, cfg.physics_engine, sim_params)
     if sim is None:
-        raise RuntimeError("Failed to create sim")
+        raise RuntimeError("无法创建仿真，请核对 Isaac Gym、GPU 驱动及计算设备编号 / Failed to create sim")
     return sim
 
 
 def create_viewer(gym, sim) -> gymapi.Viewer:
     viewer = gym.create_viewer(sim, gymapi.CameraProperties())
     if viewer is None:
-        raise RuntimeError("Failed to create viewer")
+        raise RuntimeError("无法创建仿真窗口，请核对桌面显示会话和图形驱动 / Failed to create viewer")
     return viewer
 
 
@@ -273,14 +280,14 @@ def apply_initial_head_arm_pose(
     cfg: HeadArmCfg,
 ) -> None:
     if len(cfg.q_init_deg) != len(HEAD_ARM_JOINT_NAMES):
-        raise ValueError(f"q_init_deg must contain {len(HEAD_ARM_JOINT_NAMES)} values")
+        raise ValueError(f"q_init_deg 的角度数量不符，请核对头臂配置 / q_init_deg must contain {len(HEAD_ARM_JOINT_NAMES)} values")
 
     q_init_rad = np.deg2rad(np.asarray(cfg.q_init_deg, dtype=np.float64))
     for name, q in zip(HEAD_ARM_JOINT_NAMES, q_init_rad):
         try:
             idx = joint_names.index(name)
         except ValueError:
-            print(f"WARNING: Initial joint {name} is missing in Isaac asset and will be skipped.")
+            print(f"警告：仿真模型缺少初始关节，已跳过；请核对 URDF 关节名 / WARNING: Initial joint {name} is missing in Isaac asset and will be skipped.")
             continue
         targets[idx] = float(q)
         dof_states["pos"][idx] = float(q)
@@ -346,7 +353,7 @@ def infer_finger_indices(joint_names) -> Dict[str, Tuple[int, ...]]:
     missing = [finger for finger, values in indices.items() if not values]
     if missing:
         raise RuntimeError(
-            f"Cannot infer finger qpos indices for {missing}. "
+            f"无法确定以下手指的关节索引，请核对重定向配置、URDF 和关节名 / Cannot infer finger qpos indices for {missing}. "
             f"Retargeting joints are: {list(joint_names)}"
         )
     return {finger: tuple(values) for finger, values in indices.items()}
@@ -504,6 +511,7 @@ def draw_overlay(
 
 
 def main() -> None:
+    require_display()
     asset_cfg = AssetCfg()
     sim_cfg = SimCfg()
     dof_cfg = DofDriveCfg()
@@ -550,7 +558,7 @@ def main() -> None:
     print(f"Isaac qpos map: {qpos_map}")
     missing = [name for name, idx in zip(retarget_joint_names, qpos_map) if idx == -1]
     if missing:
-        print(f"WARNING: Retargeted joints missing in Isaac asset and will be skipped: {missing}")
+        print(f"警告：仿真模型缺少以下重定向关节，已跳过；请核对模型和映射 / WARNING: Retargeted joints missing in Isaac asset and will be skipped: {missing}")
 
     window_name = "D1 RPS RGB"
     last_time = time.time()
@@ -581,7 +589,7 @@ def main() -> None:
                 try:
                     bgr_view = camera.read_view()
                 except RuntimeError as exc:
-                    print(f"[ERROR] {exc}")
+                    report_error(exc)
                     break
 
                 rgb = cv2.cvtColor(bgr_view, cv2.COLOR_BGR2RGB)
@@ -629,7 +637,8 @@ def main() -> None:
                     scores=last_scores,
                     thresholds=rps_cfg.thresholds,
                 )
-                cv2.imshow(window_name, overlay)
+                with device_operation("display", "OpenCV", "visualization"):
+                    cv2.imshow(window_name, overlay)
                 if cv2.waitKey(1) & 0xFF == ord("q"):
                     break
 

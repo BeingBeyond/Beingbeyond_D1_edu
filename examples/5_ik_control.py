@@ -13,6 +13,11 @@ Use this example to:
   - Inspect how small Cartesian offsets map to joint motion.
 """
 
+from diagnostics import install_error_hook, report_error, require_display
+
+if __name__ == "__main__":
+    install_error_hook()
+
 import time
 import numpy as np
 from scipy.spatial.transform import Rotation as R
@@ -29,8 +34,8 @@ from device_detection import resolve_head_arm, device_operation
 
 
 def main():
-    print("\033[91mWARNING: Always keep the physical emergency stop button within reach.\033[0m")
-    print("\033[91m         Press it immediately if the robot motion looks unsafe.\033[0m\n")
+    print("\033[91m警告：请始终保持实体急停按钮可触及 / WARNING: Always keep the physical emergency stop button within reach.\033[0m")
+    print("\033[91m         运动异常时立即按下急停 / Press it immediately if the robot motion looks unsafe.\033[0m\n")
 
     from beingbeyond_d1_edu_sdk.urdf_path import get_default_urdf_path
     urdf = get_default_urdf_path()
@@ -64,7 +69,7 @@ def main():
         ]
         if len(q_init_deg) != n_joints:
             raise ValueError(
-                f"q_init_deg length ({len(q_init_deg)}) does not match "
+                f"初始角度数量与模型关节数量不符，请修改 q_init_deg 或核对 URDF / q_init_deg length ({len(q_init_deg)}) does not match "
                 f"robot joint count ({n_joints})"
             )
 
@@ -73,18 +78,21 @@ def main():
         wait_timeout_s = 2.0
 
         q_init_rad = deg_list_to_rad(q_init_deg)
-        robot.set_positions(q_init_rad)
-        robot.wait_until_reached(
-            q_init_rad,
-            active_joint_indices=range(n_joints),
-            pos_tol_deg=wait_pos_tol_deg,
-            vel_tol_deg_s=wait_vel_tol_deg_s,
-            timeout_s=5.0,
-        )
+        with device_operation('head_arm', dev, 'set_positions'):
+            robot.set_positions(q_init_rad)
+        with device_operation('head_arm', dev, 'wait_until_reached'):
+            robot.wait_until_reached(
+                q_init_rad,
+                active_joint_indices=range(n_joints),
+                pos_tol_deg=wait_pos_tol_deg,
+                vel_tol_deg_s=wait_vel_tol_deg_s,
+                timeout_s=5.0,
+            )
         time.sleep(0.5)
 
         # 3) Read current joint state and compute current EE pose
-        q_current = np.asarray(robot.get_positions(), dtype=float)  # shape (8,)
+        with device_operation('head_arm', dev, 'get_positions'):
+            q_current = np.asarray(robot.get_positions(), dtype=float)  # shape (8,)
         q_head, q_arm = kin.split_q(q_current)
 
         T_base_ee = kin.ee_in_base(q_head, q_arm)
@@ -162,17 +170,19 @@ def main():
 
             # 5.6) Send this step to the robot
             q_cmd = np.concatenate([q_head_iter, q_arm_iter])
-            robot.set_positions(q_cmd)
-            robot.wait_until_reached(
-                q_cmd,
-                active_joint_indices=range(n_joints),
-                pos_tol_deg=wait_pos_tol_deg,
-                vel_tol_deg_s=wait_vel_tol_deg_s,
-                timeout_s=wait_timeout_s,
-            )
+            with device_operation('head_arm', dev, 'set_positions'):
+                robot.set_positions(q_cmd)
+            with device_operation('head_arm', dev, 'wait_until_reached'):
+                robot.wait_until_reached(
+                    q_cmd,
+                    active_joint_indices=range(n_joints),
+                    pos_tol_deg=wait_pos_tol_deg,
+                    vel_tol_deg_s=wait_vel_tol_deg_s,
+                    timeout_s=wait_timeout_s,
+                )
 
         else:
-            print("[IK] WARNING: Max outer iterations reached without convergence.")
+            print("[IK] 警告：逆解达到迭代上限仍未收敛，请减小目标位姿偏移并核对模型及关节限位 / WARNING: Max outer iterations reached without convergence.")
 
         # 6) Final FK check
         T_final = kin.ee_in_base(q_head_iter, q_arm_iter)
@@ -188,18 +198,20 @@ def main():
         # 7) Ensure robot is at the final IK solution
         print("\n[Exec] Sending final IK solution to robot ...")
         q_final_cmd = np.concatenate([q_head_iter, q_arm_iter])
-        robot.set_positions(q_final_cmd)
-        dt = robot.wait_until_reached(
-            q_final_cmd,
-            active_joint_indices=range(n_joints),
-            pos_tol_deg=wait_pos_tol_deg,
-            vel_tol_deg_s=wait_vel_tol_deg_s,
-            timeout_s=5.0,
-        )
+        with device_operation('head_arm', dev, 'set_positions'):
+            robot.set_positions(q_final_cmd)
+        with device_operation('head_arm', dev, 'wait_until_reached'):
+            dt = robot.wait_until_reached(
+                q_final_cmd,
+                active_joint_indices=range(n_joints),
+                pos_tol_deg=wait_pos_tol_deg,
+                vel_tol_deg_s=wait_vel_tol_deg_s,
+                timeout_s=5.0,
+            )
         if dt is not None:
             print(f"[Exec] Reached final target in {dt:.2f} s.")
         else:
-            print("[Exec] Final target NOT reached (timeout or no progress).")
+            print("[Exec] 未到达最终目标（超时或无进展），请检查运动空间、目标/限位及头臂供电和舵机线 / Final target NOT reached (timeout or no progress).")
 
         time.sleep(1.0)
         print("\n[Done] IK example finished.")
@@ -207,7 +219,8 @@ def main():
         print("\nInterrupted by user (Ctrl+C).")
     finally:
 
-        robot.home_and_close()
+        with device_operation('head_arm', dev, 'home_and_close'):
+            robot.home_and_close()
 
 
 if __name__ == "__main__":

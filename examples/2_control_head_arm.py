@@ -15,6 +15,11 @@ Use this example to:
   - Check joint ordering and direction (sign of positive motion)
   - Confirm basic motion without running complex trajectories.
 """
+from diagnostics import install_error_hook, report_error, require_display
+
+if __name__ == "__main__":
+    install_error_hook()
+
 import time
 from beingbeyond_d1_edu_sdk import HeadArmRobot
 
@@ -23,8 +28,8 @@ from device_detection import resolve_head_arm, device_operation
 
 
 def main():
-    print("\033[91mWARNING: Always keep the physical emergency stop button within reach,\033[0m")
-    print("\033[91m         and press it immediately if the robot motion looks unsafe.\033[0m\n")
+    print("\033[91m警告：请始终保持实体急停按钮可触及 / WARNING: Always keep the physical emergency stop button within reach,\033[0m")
+    print("\033[91m         运动异常时立即按下急停 / and press it immediately if the robot motion looks unsafe.\033[0m\n")
 
     from beingbeyond_d1_edu_sdk.urdf_path import get_default_urdf_path
     urdf = get_default_urdf_path()
@@ -46,38 +51,42 @@ def main():
         wait_timeout_s = 1.0
         if len(q_init_deg) != n_joints:
             raise ValueError(
-                f"q_init_deg length ({len(q_init_deg)}) does not match "
+                f"初始角度数量与模型关节数量不符，请修改 q_init_deg 或核对 URDF / q_init_deg length ({len(q_init_deg)}) does not match "
                 f"robot joint count ({n_joints})"
             )
 
         q_init_rad = deg_list_to_rad(q_init_deg)
         print(f"\n[Step] Move all joints to initial pose (deg): {q_init_deg}")
-        robot.set_positions(q_init_rad)
+        with device_operation('head_arm', dev, 'set_positions'):
+            robot.set_positions(q_init_rad)
         # blocking wait until reached
-        robot.wait_until_reached(
-            q_init_rad,
-            active_joint_indices=range(n_joints),
-            pos_tol_deg=wait_pos_tol_deg,
-            vel_tol_deg_s=wait_vel_tol_deg_s,
-            timeout_s=3.0,
-        )
+        with device_operation('head_arm', dev, 'wait_until_reached'):
+            robot.wait_until_reached(
+                q_init_rad,
+                active_joint_indices=range(n_joints),
+                pos_tol_deg=wait_pos_tol_deg,
+                vel_tol_deg_s=wait_vel_tol_deg_s,
+                timeout_s=3.0,
+            )
         time.sleep(0.5)
 
         def wait_for_joint(target_rad, joint_idx):
-            return robot.wait_until_reached(
-                target_rad,
-                active_joint_indices=[joint_idx],
-                pos_tol_deg=wait_pos_tol_deg,
-                vel_tol_deg_s=wait_vel_tol_deg_s,
-                timeout_s=wait_timeout_s,
-            )
+            with device_operation('head_arm', dev, 'wait_until_reached'):
+                return robot.wait_until_reached(
+                    target_rad,
+                    active_joint_indices=[joint_idx],
+                    pos_tol_deg=wait_pos_tol_deg,
+                    vel_tol_deg_s=wait_vel_tol_deg_s,
+                    timeout_s=wait_timeout_s,
+                )
 
         # 2. for each joint, move around q_init_deg, then return to q_init_deg
         for idx, name in enumerate(joint_names):
             print(f"\n====== Joint {idx}: {name} ======")
 
             # get current state
-            q_rad, dq_rad = robot.get_positions_and_velocities()
+            with device_operation('head_arm', dev, 'get_positions_and_velocities'):
+                q_rad, dq_rad = robot.get_positions_and_velocities()
             q_deg = rad_list_to_deg(q_rad)
             dq_deg = rad_list_to_deg(dq_rad)
 
@@ -97,7 +106,8 @@ def main():
                 f"  Move joint {idx} ({name}) to "
                 f"{target_deg[idx]:.2f} deg (q_init + {motion_range_deg:.2f})"
             )
-            robot.set_positions(target_rad)
+            with device_operation('head_arm', dev, 'set_positions'):
+                robot.set_positions(target_rad)
             wait_for_joint(target_rad, idx)
 
             # 2.2 q_init - motion_range_deg
@@ -108,14 +118,16 @@ def main():
                 f"  Move joint {idx} ({name}) to "
                 f"{target_deg[idx]:.2f} deg (q_init - {motion_range_deg:.2f})"
             )
-            robot.set_positions(target_rad)
+            with device_operation('head_arm', dev, 'set_positions'):
+                robot.set_positions(target_rad)
             wait_for_joint(target_rad, idx)
 
             # 2.3 back to q_init_deg
             target_deg = base_deg.copy()
             target_rad = deg_list_to_rad(target_deg)
             print(f"  Move joint {idx} ({name}) back to {base_joint_deg:.2f} deg")
-            robot.set_positions(target_rad)
+            with device_operation('head_arm', dev, 'set_positions'):
+                robot.set_positions(target_rad)
             wait_for_joint(target_rad, idx)
 
         print(
@@ -123,7 +135,8 @@ def main():
             f"(q_init +/- {motion_range_deg:.2f} deg, then back to q_init)."
         )
     finally:
-        robot.home_and_close()
+        with device_operation('head_arm', dev, 'home_and_close'):
+            robot.home_and_close()
 
 if __name__ == "__main__":
     main()

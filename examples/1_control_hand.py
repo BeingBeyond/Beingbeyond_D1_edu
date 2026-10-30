@@ -16,6 +16,11 @@ Use this example to verify that:
     - The hand motion behavior under different speed and torque settings.
     - The tactile matrix frames are received and decoded.
 """
+from diagnostics import install_error_hook, report_error, require_display
+
+if __name__ == "__main__":
+    install_error_hook()
+
 import time
 
 import cv2
@@ -76,13 +81,14 @@ def tactile_mat_to_bgr(mat, label, cell_size=36, vmin=0, vmax=255):
     return overlay_text(color, [label], x=8, y=24, dy=18)
 
 
-def build_tactile_panel(hand, wait_complete=True, timeout=0.08):
-    thumb, index, middle, ring, little, ts = hand.read_matrix_touch_4x10(
-        request=True,
-        wait_complete=wait_complete,
-        timeout=timeout,
-        poll_interval=0.001,
-    )
+def build_tactile_panel(hand, can_iface, wait_complete=True, timeout=0.08):
+    with device_operation("hand CAN", can_iface, "tactile read"):
+        thumb, index, middle, ring, little, ts = hand.read_matrix_touch_4x10(
+            request=True,
+            wait_complete=wait_complete,
+            timeout=timeout,
+            poll_interval=0.001,
+        )
     mats = {
         "thumb": thumb,
         "index": index,
@@ -107,61 +113,74 @@ def build_tactile_panel(hand, wait_complete=True, timeout=0.08):
     return np.vstack([header, body])
 
 
-def show_tactile_preview(hand, preview_scale=0.7):
+def show_tactile_preview(hand, can_iface, preview_scale=0.7):
     if not hasattr(hand, "read_matrix_touch_4x10"):
         raise RuntimeError(
+            "当前 SDK 缺少触觉读取接口，请按本仓库 README 安装匹配平台和 Python 的 SDK wheel / "
             "The installed SDK does not expose DexHand.read_matrix_touch_4x10. "
-            "Rebuild/reinstall the SDK from the updated package source."
+            "Install the matching SDK wheel as described in this repository README."
         )
 
     print("Starting tactile preview. Press q in the window to quit.")
     while True:
-        panel = build_tactile_panel(hand, wait_complete=True, timeout=0.08)
+        panel = build_tactile_panel(hand, can_iface, wait_complete=True, timeout=0.08)
         if preview_scale != 1.0:
             panel = cv2.resize(
                 panel,
                 (int(panel.shape[1] * preview_scale), int(panel.shape[0] * preview_scale)),
                 interpolation=cv2.INTER_AREA,
             )
-        cv2.imshow("DexHand tactile", panel)
+        with device_operation("display", "OpenCV", "visualization"):
+            cv2.imshow("DexHand tactile", panel)
         key = cv2.waitKey(1) & 0xFF
         if key == ord("q"):
             break
 
 
 def main():
-    print("\033[91mWARNING: Always keep the physical emergency stop button within reach,\033[0m")
-    print("\033[91m         and press it immediately if the robot motion looks unsafe.\033[0m\n")
+    require_display()
+    print("\033[91m警告：请始终保持实体急停按钮可触及 / WARNING: Always keep the physical emergency stop button within reach,\033[0m")
+    print("\033[91m         运动异常时立即按下急停 / and press it immediately if the robot motion looks unsafe.\033[0m\n")
 
     can_iface = resolve_devices(can_iface="auto", check_ready=True)["can_iface"]
     with device_operation("hand CAN", can_iface, "controller initialization"):
         right_hand = DexHand(hand_type="right", can_iface=can_iface)
 
     try:
-        right_hand.gesture_dance(duration_s=3, m=0.1, interval_s=0.1)
+        with device_operation('hand CAN', can_iface, 'gesture_dance'):
+            right_hand.gesture_dance(duration_s=3, m=0.1, interval_s=0.1)
 
-        right_hand.open_hand()
+        with device_operation('hand CAN', can_iface, 'open_hand'):
+            right_hand.open_hand()
 
-        right_hand.set_speed(speed=[0.1, 0.1, 0.1, 0.1, 0.1, 0.1])
-        right_hand.set_torque(torque=[0.1, 0.1, 0.1, 0.1, 0.1, 0.1])
-        right_hand.set_joint_pos([0.55, 0.8, 0.42, 0.45, 0, 0])
+        with device_operation('hand CAN', can_iface, 'set_speed'):
+            right_hand.set_speed(speed=[0.1, 0.1, 0.1, 0.1, 0.1, 0.1])
+        with device_operation('hand CAN', can_iface, 'set_torque'):
+            right_hand.set_torque(torque=[0.1, 0.1, 0.1, 0.1, 0.1, 0.1])
+        with device_operation('hand CAN', can_iface, 'set_joint_pos'):
+            right_hand.set_joint_pos([0.55, 0.8, 0.42, 0.45, 0, 0])
         time.sleep(1)
 
-        right_hand.set_speed(speed=[1, 1, 1, 1, 1, 1])
-        right_hand.set_torque(torque=[1, 1, 1, 1, 1, 1])
-        right_hand.open_hand()
+        with device_operation('hand CAN', can_iface, 'set_speed'):
+            right_hand.set_speed(speed=[1, 1, 1, 1, 1, 1])
+        with device_operation('hand CAN', can_iface, 'set_torque'):
+            right_hand.set_torque(torque=[1, 1, 1, 1, 1, 1])
+        with device_operation('hand CAN', can_iface, 'open_hand'):
+            right_hand.open_hand()
         time.sleep(1)
 
-        print(right_hand.read_joint_pos())
+        with device_operation('hand CAN', can_iface, 'read_joint_pos'):
+            print(right_hand.read_joint_pos())
         time.sleep(1)
-        print(right_hand.read_joint_pos())
+        with device_operation('hand CAN', can_iface, 'read_joint_pos'):
+            print(right_hand.read_joint_pos())
 
-        show_tactile_preview(right_hand)
+        show_tactile_preview(right_hand, can_iface)
 
     except KeyboardInterrupt:
         pass
     except Exception as e:
-        print(f"Error: {e}")
+        report_error(e, role="hand CAN", device=can_iface)
 
     finally:
         try:
@@ -170,14 +189,16 @@ def main():
             pass
         try:
             safe_open = [0.0] * 6
-            right_hand.set_joint_pos(safe_open)
+            with device_operation('hand CAN', can_iface, 'set_joint_pos'):
+                right_hand.set_joint_pos(safe_open)
             time.sleep(0.1)
         except Exception as e:
-            print(f"Failed to send safe-open: {e}")
+            report_error(e, role="hand CAN", device=can_iface, stage="open_hand")
         try:
-            right_hand.close_can()
+            with device_operation('hand CAN', can_iface, 'close_can'):
+                right_hand.close_can()
         except Exception as e:
-            print(f"Failed to close: {e}")
+            report_error(e, role="hand CAN", device=can_iface, stage="close_can")
 
 if __name__ == '__main__':
     main()

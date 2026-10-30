@@ -15,6 +15,11 @@ Keyboard in the Isaac Gym viewer:
 Close the Isaac Gym viewer or the slider panel to exit.
 """
 
+from diagnostics import install_error_hook, report_error, require_display
+
+if __name__ == "__main__":
+    install_error_hook()
+
 import math
 import os
 import random
@@ -97,18 +102,18 @@ def create_sim(gym, cfg: SimCfg) -> gymapi.Sim:
 
     sim_params.use_gpu_pipeline = cfg.use_gpu_pipeline
     if cfg.use_gpu_pipeline:
-        print("WARNING: Forcing CPU pipeline.")
+        print("警告：当前示例强制使用 CPU 仿真管线 / WARNING: Forcing CPU pipeline.")
 
     sim = gym.create_sim(cfg.compute_device_id, cfg.graphics_device_id, cfg.physics_engine, sim_params)
     if sim is None:
-        raise RuntimeError("Failed to create sim")
+        raise RuntimeError("无法创建仿真，请核对 Isaac Gym、GPU 驱动及计算设备编号 / Failed to create sim")
     return sim
 
 
 def create_viewer(gym, sim) -> gymapi.Viewer:
     viewer = gym.create_viewer(sim, gymapi.CameraProperties())
     if viewer is None:
-        raise RuntimeError("Failed to create viewer")
+        raise RuntimeError("无法创建仿真窗口，请核对桌面显示会话和图形驱动 / Failed to create viewer")
     return viewer
 
 
@@ -120,7 +125,7 @@ def add_ground(gym, sim) -> None:
 
 def load_asset(gym, sim, cfg: AssetCfg):
     if not os.path.isfile(cfg.asset_path):
-        raise FileNotFoundError(f"URDF not found: {cfg.asset_path}")
+        raise FileNotFoundError(f"URDF 文件不存在，请核对模型路径并确认 SDK 模型已安装 / URDF not found: {cfg.asset_path}")
 
     asset_root = os.path.dirname(cfg.asset_path)
     asset_file = os.path.basename(cfg.asset_path)

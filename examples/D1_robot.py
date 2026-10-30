@@ -3,6 +3,7 @@ import sys
 import threading
 import time
 import traceback
+from diagnostics import format_error, report_error
 
 from beingbeyond_d1_edu_sdk import HeadArmRobot
 from beingbeyond_d1_edu_sdk.hand import DexHand
@@ -61,16 +62,16 @@ class D1Robot:
         Press 'q' in the window to stop when display is enabled.
         """
         if self.vision is None:
-            raise RuntimeError("Vision is disabled for this D1Robot.")
+            raise RuntimeError("当前 D1Robot 未启用视觉；需要相机时请设置 enable_vision=True / Vision is disabled for this D1Robot.")
         if startup_timeout <= 0:
-            raise ValueError("startup_timeout must be positive")
+            raise ValueError("startup_timeout 必须大于 0，请修改首帧等待超时配置 / startup_timeout must be positive")
         if self._vision_thread is not None and self._vision_thread.is_alive():
             return  # already running
 
         if display and sys.platform.startswith("linux") and not (
             os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")
         ):
-            print("[VisionThread] No display session detected; capturing without a window.")
+            print("[VisionThread] 未检测到图形桌面会话，仅采集图像而不显示窗口 / No display session detected; capturing without a window.")
             display = False
 
         self._vision_stop_event = threading.Event()
@@ -97,7 +98,8 @@ class D1Robot:
                             fps = 0.9 * fps + 0.1 * (1.0 / dt) if fps > 0 else 1.0 / dt
 
                         if display:
-                            cv2.imshow(window_name, camera.draw_info(vis, fps))
+                            with device_operation("display", window_name, "visualization"):
+                                cv2.imshow(window_name, camera.draw_info(vis, fps))
                             window_created = True
                             if cv2.waitKey(1) & 0xFF == ord("q"):
                                 stop_event.set()
@@ -105,8 +107,7 @@ class D1Robot:
 
             except Exception as e:
                 self._vision_error = e
-                print("[VisionThread] Error:")
-                print(e)
+                report_error(e)
                 traceback.print_exc()
             finally:
                 stop_event.set()
@@ -124,13 +125,16 @@ class D1Robot:
         self._vision_thread.start()
         if not ready.wait(startup_timeout):
             self.stop_vision_thread()
-            raise RuntimeError("stereo camera port={}: Timed out waiting for the first camera frame.".format(self.vision.device))
+            raise RuntimeError(format_error("stereo camera", self.vision.device, "read frame",
+                                            TimeoutError("等待相机首帧超时 / Timed out waiting for the first camera frame.")))
         self._raise_vision_error()
 
     def _raise_vision_error(self):
         if self._vision_error is not None:
-            raise RuntimeError("stereo camera port={}: D1 camera capture failed: {}".format(
-                self.vision.device, self._vision_error)) from self._vision_error
+            if "stage=visualization" in str(self._vision_error):
+                raise RuntimeError(str(self._vision_error)) from self._vision_error
+            raise RuntimeError(format_error("stereo camera", self.vision.device, "read frame",
+                                            RuntimeError("D1 相机采集失败 / D1 camera capture failed: {}".format(self._vision_error)))) from self._vision_error
 
     def stop_vision_thread(self, join_timeout: float = 2.0):
         """
@@ -169,8 +173,8 @@ class D1Robot:
         # Stop vision thread first
         try:
             self.stop_vision_thread()
-        except Exception:
-            pass
+        except Exception as exc:
+            report_error(exc, role="stereo camera", device=self.devices.get("camera"), stage="close")
 
         # Then release robot hardware
         if self.vision is not None and (
@@ -178,26 +182,26 @@ class D1Robot:
         ):
             try:
                 self.vision.stop()
-            except Exception:
-                pass
+            except Exception as exc:
+                report_error(exc, role="stereo camera", device=self.devices.get("camera"), stage="close")
         if self.hand is not None:
             if open_hand:
                 try:
                     self.hand.open_hand()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    report_error(exc, role="hand CAN", device=self.devices["can_iface"], stage="open_hand")
             try:
                 self.hand.close_can()
-            except Exception:
-                pass
+            except Exception as exc:
+                report_error(exc, role="hand CAN", device=self.devices["can_iface"], stage="close_can")
         if self.head_arm is not None:
             try:
                 if home:
                     self.head_arm.home_and_close()
                 else:
                     self.head_arm.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                report_error(exc, role="head_arm", device=self.devices["head_arm"], stage="home_and_close" if home else "close")
 
     def __enter__(self):
         return self

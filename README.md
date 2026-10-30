@@ -8,6 +8,10 @@ This directory provides the BeingBeyond D1 education-version SDK wheel,
 example Python scripts, and basic guidance for environment setup,
 hardware connections, and first-time troubleshooting.
 
+示例报错现提供中英文说明，包含设备角色、端口、失败阶段及相机线、遥操臂线、舵机 ID 等排查建议。
+详见 [双语报错与接线排查 / Bilingual troubleshooting](docs/TROUBLESHOOTING.md)。
+Examples now explain failures in Chinese and English, with device/port/stage context and connection checks.
+
 > **WARNING**<br>
 > Keep the physical emergency stop button within reach at all times.
 > Press it immediately if the robot motion looks unsafe.

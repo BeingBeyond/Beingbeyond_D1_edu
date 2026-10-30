@@ -8,7 +8,8 @@ import numpy as np
 
 from beingbeyond_d1_edu_sdk.exo import ExoDriver, ExoDriverCfg
 from beingbeyond_d1_edu_sdk.glove_driver import GloveConfig
-from device_detection import resolve_devices
+from device_detection import resolve_devices, device_operation
+from diagnostics import format_error, warn_exo_readings
 
 
 RED = "\033[31m"
@@ -37,7 +38,7 @@ def print_red(message: str, end: str = "\n") -> None:
 
 def require_len(name: str, values: Sequence[object], expected: int) -> None:
     if len(values) != expected:
-        raise ValueError(f"{name} must contain {expected} values")
+        raise ValueError(f"配置项数值数量不正确，请修改对应列表 / {name} must contain {expected} values")
 
 
 def validate_common_cfg(cfg) -> None:
@@ -45,14 +46,14 @@ def validate_common_cfg(cfg) -> None:
     require_len("arm_init_deg", cfg.arm_init_deg, 6)
     require_len("arm_sign", cfg.arm_sign, 6)
     if any(sign == 0 for sign in cfg.arm_sign):
-        raise ValueError("arm_sign values must be non-zero")
+        raise ValueError("arm_sign 不能包含 0，请为每个关节设置方向系数 / arm_sign values must be non-zero")
     if cfg.loop_hz <= 0.0:
-        raise ValueError("loop_hz must be positive")
+        raise ValueError("loop_hz 必须大于 0，请修改控制循环频率 / loop_hz must be positive")
 
 
 def validate_urdf_path(urdf_path: str) -> None:
     if not Path(urdf_path).is_file():
-        raise FileNotFoundError(f"URDF not found: {urdf_path}")
+        raise FileNotFoundError(f"URDF 模型文件不存在，请核对配置路径和 SDK 安装 / URDF not found: {urdf_path}")
 
 
 def resolve_teleop_devices(cfg):
@@ -107,8 +108,8 @@ def max_angle_delta_deg(current: List[float], previous: List[float]) -> float:
 
 
 def calibrate_arm_exo_zero(exo: ExoDriver, cfg) -> List[float]:
-    print_red("ARM EXO ZERO CALIBRATION")
-    print_red("Move the arm exo to the zero position and hold still.")
+    print_red("遥操臂零位标定 / ARM EXO ZERO CALIBRATION")
+    print_red("请将遥操臂移到零位并保持静止 / Move the arm exo to the zero position and hold still.")
 
     deadline_s = time.monotonic() + cfg.zero_calibration_timeout_s
     previous_angles: Optional[List[float]] = None
@@ -116,12 +117,14 @@ def calibrate_arm_exo_zero(exo: ExoDriver, cfg) -> List[float]:
     last_countdown_s: Optional[int] = None
 
     while time.monotonic() < deadline_s:
-        angles = exo.read_frame().angles_deg
+        with device_operation("exo", cfg.arm_exo_port, "calibration"):
+            angles = exo.read_frame().angles_deg
+        warn_exo_readings([v is not None for v in angles], cfg.arm_exo_servo_ids, cfg.arm_exo_port)
         if not all_angles_valid(angles):
             previous_angles = None
             stable_since_s = None
             last_countdown_s = None
-            print_red("\rWaiting for valid arm exo readings...                    ", end="")
+            print_red("\r等待有效的遥操臂角度数据，请检查上方提示的 ID 和接线 / Waiting for valid arm exo readings...                    ", end="")
             time.sleep(cfg.zero_calibration_poll_s)
             continue
 
@@ -141,21 +144,24 @@ def calibrate_arm_exo_zero(exo: ExoDriver, cfg) -> List[float]:
             remaining_s = max(0.0, cfg.zero_calibration_stable_s - stable_elapsed_s)
             countdown_s = int(math.ceil(remaining_s))
             if countdown_s != last_countdown_s:
-                print_red(f"\rHold still... {countdown_s}s remaining.                 ", end="")
+                print_red(f"\r请保持静止 / Hold still... {countdown_s}s remaining.                 ", end="")
                 last_countdown_s = countdown_s
             if stable_elapsed_s >= cfg.zero_calibration_stable_s:
-                print_red("\rArm exo zero calibration complete.                       ")
+                print_red("\r遥操臂零位标定完成 / Arm exo zero calibration complete.                       ")
                 print("arm_zero_offsets_deg:", [round(v, 3) for v in current_angles])
                 return current_angles
         else:
             stable_since_s = now_s
             last_countdown_s = None
-            print_red(f"\rMovement detected ({delta_deg:.2f} deg). Hold still.     ", end="")
+            print_red(f"\r检测到移动，请保持静止 / Movement detected ({delta_deg:.2f} deg). Hold still.     ", end="")
 
         previous_angles = current_angles
         time.sleep(cfg.zero_calibration_poll_s)
 
-    raise RuntimeError("Timed out while calibrating arm exo zero.")
+    raise RuntimeError(format_error("exo", cfg.arm_exo_port, "calibration", RuntimeError(
+        "遥操臂零位标定超时；若有无效读数请按上方 ID 查线，若读数有效请保持零位静止并核对标定时长 / "
+        "Timed out while calibrating arm exo zero. Check the listed invalid IDs, or hold still at zero and verify calibration timing. "
+        "servo IDs={}".format(cfg.arm_exo_servo_ids))))
 
 
 def clamp(value: float, low: float, high: float) -> float:

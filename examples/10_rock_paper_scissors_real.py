@@ -11,6 +11,11 @@ DexHand during the game. Keep the physical emergency stop button within reach.
 Press q in the OpenCV camera window to exit.
 """
 
+from diagnostics import install_error_hook, report_error, require_display
+
+if __name__ == "__main__":
+    install_error_hook()
+
 import importlib
 import random
 import sys
@@ -28,7 +33,7 @@ from beingbeyond_d1_edu_sdk.urdf_path import get_default_urdf_path
 
 from vision import StereoRGBCamera
 from utils import deg_list_to_rad
-from device_detection import resolve_devices
+from device_detection import resolve_devices, device_operation
 
 
 EXAMPLES_DIR = Path(__file__).resolve().parent
@@ -207,7 +212,7 @@ def infer_finger_indices(joint_names) -> Dict[str, Tuple[int, ...]]:
     missing = [finger for finger, values in indices.items() if not values]
     if missing:
         raise RuntimeError(
-            f"Cannot infer finger qpos indices for {missing}. "
+            f"无法确定以下手指的关节索引，请核对重定向配置、URDF 和关节名 / Cannot infer finger qpos indices for {missing}. "
             f"Retargeting joints are: {list(joint_names)}"
         )
     return {finger: tuple(values) for finger, values in indices.items()}
@@ -307,9 +312,10 @@ def build_real_hand_gesture_sequences(cfg: HandCfg) -> Dict[str, Tuple[Tuple[np.
     }
 
 
-def apply_real_hand_gesture_sequence(hand: DexHand, sequence: Tuple[Tuple[np.ndarray, float], ...]) -> None:
+def apply_real_hand_gesture_sequence(hand: DexHand, sequence: Tuple[Tuple[np.ndarray, float], ...], can_iface="未指定 / unspecified") -> None:
     for qpos, delay_s in sequence:
-        hand.set_joint_pos(np.clip(qpos, 0.0, 1.0).tolist())
+        with device_operation('hand CAN', can_iface, 'set_joint_pos'):
+            hand.set_joint_pos(np.clip(qpos, 0.0, 1.0).tolist())
         if delay_s > 0.0:
             time.sleep(delay_s)
 
@@ -336,6 +342,7 @@ def apply_rps_head_arm_posture(
     gesture: str,
     postures: Dict[str, Tuple[Tuple[float, ...], Tuple[float, ...]]],
     cfg: RpsArmCfg,
+    arm_dev="未指定 / unspecified",
 ) -> None:
     if not cfg.enabled:
         return
@@ -346,15 +353,17 @@ def apply_rps_head_arm_posture(
 
     head_deg, arm_deg = posture
     head_arm_q = deg_list_to_rad(list(head_deg) + list(arm_deg))
-    head_arm.set_positions(head_arm_q)
+    with device_operation('head_arm', arm_dev, 'set_positions'):
+        head_arm.set_positions(head_arm_q)
 
     if cfg.wait:
-        head_arm.wait_until_reached(
-            head_arm_q,
-            pos_tol_deg=cfg.wait_pos_tol_deg,
-            vel_tol_deg_s=cfg.wait_vel_tol_deg_s,
-            timeout_s=cfg.wait_timeout_s,
-        )
+        with device_operation('head_arm', arm_dev, 'wait_until_reached'):
+            head_arm.wait_until_reached(
+                head_arm_q,
+                pos_tol_deg=cfg.wait_pos_tol_deg,
+                vel_tol_deg_s=cfg.wait_vel_tol_deg_s,
+                timeout_s=cfg.wait_timeout_s,
+            )
 
 
 def apply_posture(
@@ -365,27 +374,32 @@ def apply_posture(
     hand_q_norm: Tuple[float, ...],
     wait: bool = False,
     idle_cfg: Optional[IdleCfg] = None,
+    devices=None,
 ) -> Optional[float]:
+    devices = devices or {}
     head_q = deg_list_to_rad(list(head_deg))
     arm_q = deg_list_to_rad(list(arm_deg))
     head_arm_q = head_q + arm_q
 
-    head_arm.set_positions(head_arm_q)
-    hand.set_joint_pos(list(hand_q_norm))
+    with device_operation('head_arm', devices.get('head_arm', "未指定 / unspecified"), 'set_positions'):
+        head_arm.set_positions(head_arm_q)
+    with device_operation('hand CAN', devices.get('can_iface', "未指定 / unspecified"), 'set_joint_pos'):
+        hand.set_joint_pos(list(hand_q_norm))
 
     if not wait:
         return None
 
     wait_cfg = idle_cfg or IdleCfg()
-    return head_arm.wait_until_reached(
-        head_arm_q,
-        pos_tol_deg=wait_cfg.wait_pos_tol_deg,
-        vel_tol_deg_s=wait_cfg.wait_vel_tol_deg_s,
-        timeout_s=wait_cfg.wait_timeout_s,
-    )
+    with device_operation('head_arm', devices.get('head_arm', "未指定 / unspecified"), 'wait_until_reached'):
+        return head_arm.wait_until_reached(
+            head_arm_q,
+            pos_tol_deg=wait_cfg.wait_pos_tol_deg,
+            vel_tol_deg_s=wait_cfg.wait_vel_tol_deg_s,
+            timeout_s=wait_cfg.wait_timeout_s,
+        )
 
 
-def apply_thumbs_up_idle_posture(head_arm: HeadArmRobot, hand: DexHand, idle_cfg: IdleCfg) -> None:
+def apply_thumbs_up_idle_posture(head_arm: HeadArmRobot, hand: DexHand, idle_cfg: IdleCfg, devices=None) -> None:
     elapsed = apply_posture(
         head_arm,
         hand,
@@ -394,11 +408,12 @@ def apply_thumbs_up_idle_posture(head_arm: HeadArmRobot, hand: DexHand, idle_cfg
         hand_q_norm=(0.0, 0.0, 1.0, 1.0, 1.0, 1.0),
         wait=True,
         idle_cfg=idle_cfg,
+        devices=devices,
     )
     if elapsed is not None:
         print(f"Reached idle thumbs-up posture in {elapsed:.2f} s.")
     else:
-        print("Idle thumbs-up posture NOT reached (timeout or no progress).")
+        print("点赞姿态未到达，请核对目标/限位、运动空间、头臂供电及舵机线 / Idle thumbs-up posture NOT reached (timeout or no progress).")
 
 
 class IdleMotion:
@@ -407,7 +422,9 @@ class IdleMotion:
         cfg: IdleCfg,
         ready_head_arm_deg: Tuple[float, ...],
         ready_hand_q_norm: Tuple[float, ...],
+        devices=None,
     ):
+        self.devices = devices or {}
         self.cfg = cfg
         self.ready_head_arm_deg = ready_head_arm_deg
         self.ready_hand_q_norm = ready_hand_q_norm
@@ -433,6 +450,7 @@ class IdleMotion:
             hand_q_norm=self.ready_hand_q_norm,
             wait=True,
             idle_cfg=self.cfg,
+            devices=self.devices,
         )
         self.completed = True
         print("Idle action finished. Back to rock-paper-scissors ready posture.")
@@ -450,7 +468,7 @@ class IdleMotion:
 
         if self.mode == "thumbs_up":
             if self.next_step_time == 0.0:
-                apply_thumbs_up_idle_posture(head_arm, hand, self.cfg)
+                apply_thumbs_up_idle_posture(head_arm, hand, self.cfg, self.devices)
                 self.next_step_time = now + self.cfg.thumbs_up_hold_s
             elif now >= self.next_step_time:
                 self._move_to_ready_posture(head_arm, hand)
@@ -476,7 +494,7 @@ class IdleMotion:
             ),
         )
         head_deg, arm_deg, hand_q_norm = dance_postures[self.dance_index]
-        apply_posture(head_arm, hand, head_deg, arm_deg, hand_q_norm)
+        apply_posture(head_arm, hand, head_deg, arm_deg, hand_q_norm, devices=self.devices)
         self.dance_index = (self.dance_index + 1) % len(dance_postures)
         self.dance_steps_done += 1
         self.next_step_time = now + self.cfg.dance_interval_s
@@ -486,7 +504,7 @@ class IdleMotion:
 def move_head_arm_to_initial_pose(head_arm: HeadArmRobot, cfg: HeadArmCfg) -> None:
     q_init_deg = list(cfg.q_init_deg)
     if len(q_init_deg) != 8:
-        raise ValueError("q_init_deg must contain 8 values")
+        raise ValueError("q_init_deg 必须包含 8 个头臂角度，请修改配置 / q_init_deg must contain 8 values")
 
     q_init_rad = deg_list_to_rad(q_init_deg)
     print(f"\n[Step] Move head + arm to initial pose (deg): {q_init_deg}")
@@ -531,6 +549,7 @@ def draw_overlay(
 
 
 def main() -> None:
+    require_display()
     stereo_cfg = StereoCfg()
     head_arm_cfg = HeadArmCfg()
     hand_cfg = HandCfg()
@@ -544,7 +563,7 @@ def main() -> None:
     rps_cfg = RpsCfg()
     idle_cfg = IdleCfg()
 
-    print("\033[91mWARNING: This example controls real D1 head + arm and DexHand.\033[0m")
+    print("\033[91m警告：本示例会控制真实 D1 头臂和灵巧手 / WARNING: This example controls real D1 head + arm and DexHand.\033[0m")
     print("\033[91mKeep the physical emergency stop button within reach.\033[0m\n")
 
     retargeting = init_right_hand_retargeting()
@@ -560,18 +579,24 @@ def main() -> None:
     head_arm = None
     right_hand = None
     try:
-        head_arm = HeadArmRobot(
-            urdf_path=get_default_urdf_path(),
-            dev=head_arm_cfg.dev,
-            baudrate=head_arm_cfg.baudrate,
-            return_delay=0,
-        )
-        move_head_arm_to_initial_pose(head_arm, head_arm_cfg)
+        with device_operation('head_arm', head_arm_cfg.dev, 'controller initialization'):
+            head_arm = HeadArmRobot(
+                urdf_path=get_default_urdf_path(),
+                dev=head_arm_cfg.dev,
+                baudrate=head_arm_cfg.baudrate,
+                return_delay=0,
+            )
+        with device_operation('head_arm', head_arm_cfg.dev, 'motion/readback'):
+            move_head_arm_to_initial_pose(head_arm, head_arm_cfg)
 
-        right_hand = DexHand(hand_type=hand_cfg.hand_type, can_iface=hand_cfg.can_iface, baudrate=hand_cfg.baudrate)
-        right_hand.set_speed(speed=list(hand_cfg.speed))
-        right_hand.set_torque(torque=list(hand_cfg.torque))
-        right_hand.open_hand()
+        with device_operation('hand CAN', hand_cfg.can_iface, 'controller initialization'):
+            right_hand = DexHand(hand_type=hand_cfg.hand_type, can_iface=hand_cfg.can_iface, baudrate=hand_cfg.baudrate)
+        with device_operation('hand CAN', hand_cfg.can_iface, 'set_speed'):
+            right_hand.set_speed(speed=list(hand_cfg.speed))
+        with device_operation('hand CAN', hand_cfg.can_iface, 'set_torque'):
+            right_hand.set_torque(torque=list(hand_cfg.torque))
+        with device_operation('hand CAN', hand_cfg.can_iface, 'open_hand'):
+            right_hand.open_hand()
         time.sleep(0.2)
 
         window_name = "D1 Rock-Paper-Scissors Real"
@@ -583,6 +608,7 @@ def main() -> None:
             idle_cfg,
             ready_head_arm_deg=head_arm_cfg.q_init_deg,
             ready_hand_q_norm=(hand_cfg.open_value,) * 6,
+            devices=devices,
         )
         inactive_since = time.monotonic()
         last_robot_gesture = None
@@ -608,7 +634,7 @@ def main() -> None:
                 try:
                     bgr_view = camera.read_view()
                 except RuntimeError as exc:
-                    print(f"[ERROR] {exc}")
+                    report_error(exc)
                     break
 
                 rgb = cv2.cvtColor(bgr_view, cv2.COLOR_BGR2RGB)
@@ -643,8 +669,9 @@ def main() -> None:
                             robot_gesture,
                             rps_head_arm_postures,
                             rps_arm_cfg,
+                            arm_dev=head_arm_cfg.dev,
                         )
-                        apply_real_hand_gesture_sequence(right_hand, robot_gestures[robot_gesture])
+                        apply_real_hand_gesture_sequence(right_hand, robot_gestures[robot_gesture], can_iface=hand_cfg.can_iface)
                         last_robot_gesture = robot_gesture
 
                     if frame_idx % 30 == 0:
@@ -667,7 +694,8 @@ def main() -> None:
                     scores=last_scores,
                     thresholds=rps_cfg.thresholds,
                 )
-                cv2.imshow(window_name, overlay)
+                with device_operation("display", "OpenCV", "visualization"):
+                    cv2.imshow(window_name, overlay)
                 if cv2.waitKey(1) & 0xFF == ord("q"):
                     break
 
@@ -682,20 +710,22 @@ def main() -> None:
             pass
         try:
             if right_hand is not None:
-                right_hand.open_hand()
+                with device_operation('hand CAN', hand_cfg.can_iface, 'open_hand'):
+                    right_hand.open_hand()
                 time.sleep(0.2)
         except Exception as exc:
-            print(f"Failed to send safe-open: {exc}")
+            report_error(exc, role="hand CAN", device=hand_cfg.can_iface, stage="open_hand")
         try:
             if right_hand is not None:
-                right_hand.close_can()
+                with device_operation('hand CAN', hand_cfg.can_iface, 'close_can'):
+                    right_hand.close_can()
         except Exception as exc:
-            print(f"Failed to close CAN: {exc}")
+            report_error(exc, role="hand CAN", device=hand_cfg.can_iface, stage="close_can")
         try:
             if head_arm is not None:
                 head_arm.home_and_close()
         except Exception as exc:
-            print(f"Failed to close head + arm: {exc}")
+            report_error(exc, role="head_arm", device=head_arm_cfg.dev, stage="home_and_close")
 
 
 if __name__ == "__main__":
