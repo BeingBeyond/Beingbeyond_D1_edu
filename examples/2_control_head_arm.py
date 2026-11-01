@@ -15,7 +15,10 @@ Use this example to:
   - Check joint ordering and direction (sign of positive motion)
   - Confirm basic motion without running complex trajectories.
 """
-from diagnostics import install_error_hook, report_error, require_display
+
+from diagnostics import configuration_error
+
+from diagnostics import install_error_hook
 
 if __name__ == "__main__":
     install_error_hook()
@@ -50,10 +53,7 @@ def main():
         wait_vel_tol_deg_s = 20.0
         wait_timeout_s = 1.0
         if len(q_init_deg) != n_joints:
-            raise ValueError(
-                f"初始角度数量与模型关节数量不符，请修改 q_init_deg 或核对 URDF / q_init_deg length ({len(q_init_deg)}) does not match "
-                f"robot joint count ({n_joints})"
-            )
+            raise configuration_error("q_init_deg", len(q_init_deg), n_joints)
 
         q_init_rad = deg_list_to_rad(q_init_deg)
         print(f"\n[Step] Move all joints to initial pose (deg): {q_init_deg}")

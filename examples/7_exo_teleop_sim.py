@@ -1,4 +1,6 @@
-from diagnostics import install_error_hook, report_error, require_display, warn_exo_readings
+from diagnostics import configuration_error, missing_joints_error
+
+from diagnostics import install_error_hook, report_error, warn_exo_readings
 
 if __name__ == "__main__":
     install_error_hook()
@@ -73,7 +75,7 @@ class TeleopSimCfg:
 def validate_cfg(cfg: TeleopSimCfg) -> None:
     validate_common_cfg(cfg)
     if len(cfg.head_init_deg) != 2:
-        raise ValueError("head_init_deg 必须包含两个头部角度，请修改配置 / head_init_deg must contain 2 values")
+        raise configuration_error("head_init_deg", len(cfg.head_init_deg), 2)
     validate_urdf_path(cfg.urdf_path)
 
 
@@ -91,7 +93,7 @@ def build_name_index(robot_id: int) -> Tuple[Dict[str, int], Dict[str, Tuple[flo
 def ensure_joints_exist(name_to_idx: Dict[str, int], names: List[str]) -> None:
     missing = [name for name in names if name not in name_to_idx]
     if missing:
-        raise KeyError(f"URDF 缺少以下关节，请核对模型和 SDK 版本 / URDF missing expected joints: {missing}")
+        raise missing_joints_error(missing)
 
 
 def set_joint_position(robot_id: int, joint_idx: int, q: float) -> None:
@@ -212,7 +214,7 @@ class TeleopSimulator:
         assert self.arm_zero_offsets_deg is not None
 
         dt = 1.0 / self.cfg.loop_hz
-        print("[Info] Arm exo ids:", format_servo_ids(self.cfg.arm_exo_servo_ids))
+        print("遥操臂关节通信 ID / Exoskeleton joint IDs:", format_servo_ids(self.cfg.arm_exo_servo_ids))
         print("Start sim teleop. Ctrl+C to exit.")
 
         try:
@@ -223,7 +225,7 @@ class TeleopSimulator:
                     frame = self.arm_exo.read_frame()
                 arm_q = [p.getJointState(self.robot_id, self.name_to_idx[name])[0] for name in ARM_NAMES]
                 valid = [read.ok and read.angle_deg is not None for read in frame.reads]
-                warn_exo_readings(valid, self.cfg.arm_exo_servo_ids, self.cfg.arm_exo_port)
+                warn_exo_readings(valid, self.cfg.arm_exo_servo_ids, self.cfg.arm_exo_port, self.cfg.arm_min_valid)
                 if sum(valid) >= self.cfg.arm_min_valid:
                     arm_angles_deg = [
                         float(read.angle_deg) if read.angle_deg is not None else zero
@@ -264,7 +266,6 @@ class TeleopSimulator:
             print("\nInterrupted by user (Ctrl+C).")
         except Exception as exc:
             report_error(exc)
-            traceback.print_exc()
         finally:
             try:
                 self._reset_pose()

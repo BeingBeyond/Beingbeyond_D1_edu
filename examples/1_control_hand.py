@@ -16,6 +16,9 @@ Use this example to verify that:
     - The hand motion behavior under different speed and torque settings.
     - The tactile matrix frames are received and decoded.
 """
+
+from diagnostics import failure
+
 from diagnostics import install_error_hook, report_error, require_display
 
 if __name__ == "__main__":
@@ -115,11 +118,7 @@ def build_tactile_panel(hand, can_iface, wait_complete=True, timeout=0.08):
 
 def show_tactile_preview(hand, can_iface, preview_scale=0.7):
     if not hasattr(hand, "read_matrix_touch_4x10"):
-        raise RuntimeError(
-            "当前 SDK 缺少触觉读取接口，请按本仓库 README 安装匹配平台和 Python 的 SDK wheel / "
-            "The installed SDK does not expose DexHand.read_matrix_touch_4x10. "
-            "Install the matching SDK wheel as described in this repository README."
-        )
+        raise failure("P05", "当前 SDK 不支持触觉读取。", "The installed SDK does not support tactile readings.", "请按本仓库 README 安装包含该功能的 SDK 版本。", "Install the SDK version with tactile support using this repository README.")
 
     print("Starting tactile preview. Press q in the window to quit.")
     while True:
@@ -132,7 +131,7 @@ def show_tactile_preview(hand, can_iface, preview_scale=0.7):
             )
         with device_operation("display", "OpenCV", "visualization"):
             cv2.imshow("DexHand tactile", panel)
-        key = cv2.waitKey(1) & 0xFF
+            key = cv2.waitKey(1) & 0xFF
         if key == ord("q"):
             break
 

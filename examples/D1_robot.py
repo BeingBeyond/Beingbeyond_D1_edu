@@ -1,3 +1,5 @@
+from diagnostics import configuration_error, failure
+
 import os
 import sys
 import threading
@@ -62,9 +64,9 @@ class D1Robot:
         Press 'q' in the window to stop when display is enabled.
         """
         if self.vision is None:
-            raise RuntimeError("当前 D1Robot 未启用视觉；需要相机时请设置 enable_vision=True / Vision is disabled for this D1Robot.")
+            raise failure("P08", "当前 D1Robot 未启用视觉。", "Vision is disabled for this D1Robot.", "需要相机时请设置 enable_vision=True。", "Set enable_vision=True if a camera is required.")
         if startup_timeout <= 0:
-            raise ValueError("startup_timeout 必须大于 0，请修改首帧等待超时配置 / startup_timeout must be positive")
+            raise configuration_error("startup_timeout", startup_timeout, "> 0")
         if self._vision_thread is not None and self._vision_thread.is_alive():
             return  # already running
 
@@ -100,15 +102,17 @@ class D1Robot:
                         if display:
                             with device_operation("display", window_name, "visualization"):
                                 cv2.imshow(window_name, camera.draw_info(vis, fps))
-                            window_created = True
-                            if cv2.waitKey(1) & 0xFF == ord("q"):
+                                window_created = True
+                                key = cv2.waitKey(1) & 0xFF
+                            if key == ord("q"):
                                 stop_event.set()
                         ready.set()
 
             except Exception as e:
-                self._vision_error = e
-                report_error(e)
-                traceback.print_exc()
+                self._vision_error = format_error("stereo camera", self.vision.device, "read frame", e)
+                if self._vision_error is not e:
+                    self._vision_error.__cause__ = e
+                report_error(self._vision_error)
             finally:
                 stop_event.set()
                 ready.set()
@@ -125,16 +129,13 @@ class D1Robot:
         self._vision_thread.start()
         if not ready.wait(startup_timeout):
             self.stop_vision_thread()
-            raise RuntimeError(format_error("stereo camera", self.vision.device, "read frame",
-                                            TimeoutError("等待相机首帧超时 / Timed out waiting for the first camera frame.")))
+            raise format_error("stereo camera", self.vision.device, "read frame",
+                                            TimeoutError("等待相机首帧超时 / Timed out waiting for the first camera frame."))
         self._raise_vision_error()
 
     def _raise_vision_error(self):
         if self._vision_error is not None:
-            if "stage=visualization" in str(self._vision_error):
-                raise RuntimeError(str(self._vision_error)) from self._vision_error
-            raise RuntimeError(format_error("stereo camera", self.vision.device, "read frame",
-                                            RuntimeError("D1 相机采集失败 / D1 camera capture failed: {}".format(self._vision_error)))) from self._vision_error
+            raise self._vision_error
 
     def stop_vision_thread(self, join_timeout: float = 2.0):
         """

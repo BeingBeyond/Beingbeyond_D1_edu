@@ -61,7 +61,8 @@ def main():
             with device_operation("display", "OpenCV", "visualization"):
                 cv2.imshow(window_name, camera.draw_info(rgb_view, fps))
 
-            if cv2.waitKey(1) & 0xFF == ord("q"):
+                key = cv2.waitKey(1) & 0xFF
+            if key == ord("q"):
                 break
 
     cv2.destroyAllWindows()

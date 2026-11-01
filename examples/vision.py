@@ -6,6 +6,9 @@ This module defines StereoRGBCamera, which:
   - Splits each frame into left and right color images
   - Builds a single RGB display view from both eyes or either eye
 """
+
+from diagnostics import configuration_error, failure
+
 import cv2
 from diagnostics import format_error
 from device_detection import resolve_camera_device, device_operation
@@ -26,7 +29,7 @@ class StereoRGBCamera:
         view="both",
     ):
         if view not in ("both", "left", "right"):
-            raise ValueError("view 必须为 both（双眼）、left（左眼）或 right（右眼），请修改相机配置 / view must be 'both', 'left', or 'right'")
+            raise configuration_error("view", view, "both / left / right")
 
         self.device = resolve_camera_device(device)
         self.single_width = single_width
@@ -36,6 +39,7 @@ class StereoRGBCamera:
         self.swap_lr = swap_lr
         self.view = view
         self.cap = None
+        self._has_frame = False
 
     def start(self):
         if self.cap is not None:
@@ -48,14 +52,14 @@ class StereoRGBCamera:
             cap = cv2.VideoCapture(self.device, cv2.CAP_V4L2)
         if not cap.isOpened():
             cap.release()
-            raise RuntimeError(format_error("stereo camera", self.device, "open",
-                                            RuntimeError("相机打开失败 / Could not open camera: " + self.device)))
+            raise failure("V06", "无法打开相机：{}。".format(self.device), "Could not open camera {}.".format(self.device),
+                          "请先退出其他使用相机的程序，再重新插好相机 USB 线。", "Close other camera applications, then reconnect its USB cable.")
 
         try:
             with device_operation("stereo camera", self.device, "configure capture"):
                 if self.fourcc.upper() != "NONE":
                     if len(self.fourcc) != 4:
-                        raise ValueError("fourcc 必须为 4 字符格式编码，例如 MJPG 或 YUYV，请修改相机配置 / fourcc must have 4 characters, e.g. MJPG or YUYV.")
+                        raise configuration_error("fourcc", self.fourcc, "4 个字符", "4 characters")
                     cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*self.fourcc))
                 cap.set(cv2.CAP_PROP_FRAME_WIDTH, capture_width)
                 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, capture_height)
@@ -64,20 +68,9 @@ class StereoRGBCamera:
             cap.release()
             raise
         self.cap = cap
+        self._has_frame = False
 
-        print("============================================================")
-        print("Camera opened")
-        print("Device:", self.device)
-        print("Requested resolution:", capture_width, "x", capture_height)
-        print("Actual resolution:", int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), "x",
-              int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)))
-        print("Requested FPS:", self.fps)
-        print("Actual FPS:", cap.get(cv2.CAP_PROP_FPS))
-        print("Requested FOURCC:", self.fourcc)
-        print("Actual FOURCC:", self._actual_fourcc())
-        print("View:", self.view)
-        print("Controls: q to quit vision window")
-        print("============================================================")
+        print("相机已打开：{}。\nCamera opened: {}.".format(self.device, self.device))
 
     def _actual_fourcc(self):
         value = int(self.cap.get(cv2.CAP_PROP_FOURCC))
@@ -90,14 +83,18 @@ class StereoRGBCamera:
         with device_operation("stereo camera", self.device, "read frame"):
             ret, frame = self.cap.read()
         if not ret or frame is None:
-            raise RuntimeError(format_error("stereo camera", self.device, "read frame", RuntimeError("相机没有返回图像 / Failed to read frame.")))
+            if self._has_frame:
+                raise failure("V09", "相机 {} 取帧中断。".format(self.device), "Capture from camera {} was interrupted.".format(self.device),
+                              "请检查相机 USB 线和接头是否松动。", "Check its USB cable and connectors.")
+            raise format_error("stereo camera", self.device, "read frame", TimeoutError("No frame"))
 
         frame_h, frame_w = frame.shape[:2]
         expected_w = 2 * self.single_width
         if frame_h < self.single_height or frame_w < expected_w:
-            raise RuntimeError(format_error("stereo camera", self.device, "read frame", RuntimeError(
-                f"图像尺寸不足：实际 {frame_w}x{frame_h}，至少需要 {expected_w}x{self.single_height} / Frame size is too small. Got {frame_w}x{frame_h}, "
-                f"expected at least {expected_w}x{self.single_height}.")))
+            raise failure("V08", "相机图像尺寸不符：实际 {}×{}，需要至少 {}×{}。设备：{}。".format(frame_w, frame_h, expected_w, self.single_height, self.device),
+                          "Camera frame size mismatch on {}: got {}x{}, need at least {}x{}.".format(self.device, frame_w, frame_h, expected_w, self.single_height),
+                          "请核对相机设备和采集分辨率。", "Check the selected camera and capture resolution.")
+        self._has_frame = True
 
         left_bgr = frame[0:self.single_height, 0:self.single_width]
         right_bgr = frame[

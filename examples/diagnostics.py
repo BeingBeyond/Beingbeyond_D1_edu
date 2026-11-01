@@ -1,132 +1,423 @@
-"""Bilingual example diagnostics. Standard library only; never touches hardware."""
+"""Short bilingual diagnostics for examples. No SDK imports or hardware access."""
 import argparse
+import ast
+import errno
 import os
+import re
 import subprocess
 import sys
-import time
+import threading
+import traceback
 
 
 def bilingual(chinese, english):
-    return "{} / {}".format(chinese, english)
+    return chinese + "\n" + english
 
 
-_ROLES = {
-    "head_arm": ("机器人头臂控制器", "检查机器人头臂控制器 USB 线和供电；停止其他串口程序，核对 dialout 权限、端口及波特率（默认 1000000）。若列出舵机 ID，断电后检查这些 ID 对应的舵机接头及上游串联线。",
-                 "Check the robot head/arm USB cable and power, stop other serial programs, and verify dialout access, port and baudrate (default 1000000). For listed servo IDs, power off before checking their connectors and upstream daisy-chain wiring."),
-    "exo": ("遥操臂（外骨骼）", "检查遥操臂 USB 线、控制板供电和下游舵机串联线；核对 arm_exo_port、arm_exo_baudrate（默认 115200）及 arm_exo_servo_ids。列出 ID 时，断电后检查对应舵机及上游接头。",
-            "Check the exoskeleton USB cable, controller power and servo daisy-chain wiring; verify arm_exo_port, arm_exo_baudrate (default 115200) and arm_exo_servo_ids. Power off before inspecting the listed servo IDs and upstream connectors."),
-    "glove": ("遥操手套", "检查手套 USB 线和供电、glove_port 和 glove_baudrate（默认 115200）；确认没有误接到头臂控制器，并退出占用串口的程序。手套应连续输出含 6 路有限数值的 ANGLES 数据。",
-              "Check the glove USB cable, power, glove_port and glove_baudrate (default 115200); confirm this is not the head/arm controller and stop other serial users. Expect consecutive ANGLES frames with six finite values."),
-    "hand CAN": ("灵巧手 CAN 总线", "检查 PCAN 的 USB 线、手部供电及 CAN_H/CAN_L 连线和终端电阻；用 ip -details -statistics link show <接口> 核对实际接口、UP、波特率（默认 1000000）及 BUS-OFF，核对左右手配置。确认接线后按 README 恢复总线。",
-                 "Check the PCAN USB cable, hand power, CAN_H/CAN_L wiring and termination. Use ip -details -statistics link show <interface> to verify the selected interface, UP state, bitrate (default 1000000) and BUS-OFF; verify the hand side. Follow README bus recovery instructions after checking wiring."),
-    "stereo camera": ("双目 USB 相机", "检查相机自己的 USB 线、接头和供电（头臂 USB 线不负责相机）；用 lsusb、v4l2-ctl --list-devices 及 /dev/v4l/by-id/ 核对设备，检查 video 权限并退出占用相机的程序。取帧异常时核对 MJPG、1280×480 请求格式和 USB 带宽。",
-                      "Check the camera's own USB cable, connectors and power (separate from the head/arm USB cable). Verify enumeration with lsusb, v4l2-ctl --list-devices and /dev/v4l/by-id/, video permissions and other camera users. For capture failures, check the requested MJPG 1280x480 format and USB bandwidth."),
-    "display": ("图形显示", "在本地图形桌面终端运行并核对 DISPLAY/WAYLAND_DISPLAY；普通 SSH 不提供显示会话。支持无窗口模式的示例可关闭显示。检查 OpenCV/Qt 图形依赖；显示错误不代表相机线有问题。",
-                "Run in a local desktop terminal and verify DISPLAY/WAYLAND_DISPLAY; plain SSH has no display session. Disable visualization where supported. Check OpenCV/Qt GUI dependencies; a display failure does not establish a camera wiring fault."),
-    "serial roles": ("串口设备组", "按下方每个角色核对 USB 线、供电、端口和波特率；头臂、遥操臂和手套必须使用各自独立的串口，不能把同一端口分配给多个角色。",
-                     "Check each listed role's USB cable, power, port and baudrate. Head/arm, exoskeleton and glove require separate serial ports; do not assign one port to multiple roles."),
-}
-_ROLES["can_iface"] = _ROLES["hand CAN"]
-_ROLES["camera"] = _ROLES["stereo camera"]
-
-_STAGES = {
-    "controller initialization": "初始化控制器", "serial verification": "串口通信验证",
-    "explicit serial verification": "验证指定串口", "discovery/verification": "识别并验证设备",
-    "discovery": "识别设备", "communication check": "通信预检查", "status check": "手部状态预检查",
-    "capture check": "相机取帧预检查", "open": "打开设备", "configure capture": "设置采集格式",
-    "read frame": "读取图像", "set positions": "发送关节位置", "read positions": "读取关节位置",
-    "motion/readback": "运动控制及状态回读", "read_frame": "读取遥操臂舵机角度",
-    "get_norm_values": "读取手套数据", "release_torque": "释放遥操臂扭矩",
-    "calibration": "零位标定", "close": "关闭设备", "home_and_close": "回零并关闭",
-    "open_hand": "张开手部", "close_can": "关闭 CAN", "tactile read": "读取触觉数据",
-    "visualization": "显示图形窗口", "runtime": "运行示例",
-    "set_positions": "发送头臂关节位置", "set_joint_pos": "发送手部关节位置",
-    "get_positions": "读取头臂位置", "get_positions_and_velocities": "读取头臂位置和速度",
-    "read_joint_pos": "读取手部位置", "wait_until_reached": "等待头臂到位",
-    "set_speed": "设置手部速度", "set_torque": "设置手部扭矩", "set_profile": "设置运动参数",
-    "gesture_dance": "执行手部动作演示", "read_matrix_touch_4x10": "读取触觉矩阵",
+LABELS = {
+    "head_arm": ("头臂控制器", "head/arm controller"),
+    "exo": ("遥操臂", "exoskeleton"), "glove": ("手套", "glove"),
+    "hand CAN": ("灵巧手", "hand"), "can_iface": ("灵巧手", "hand"),
+    "camera": ("相机", "camera"), "stereo camera": ("相机", "camera"),
+    "display": ("图形窗口", "window"),
 }
 
+_REPORT_LOCK = threading.Lock()
 
-def role_help(role):
-    label, chinese, english = _ROLES.get(role, (role, "核对配置与完整异常信息。", "Check configuration and the complete exception."))
-    return bilingual(label, role), bilingual(chinese, english)
+
+class DiagnosticError(RuntimeError):
+    """User text and technical context are kept separate."""
+    def __init__(self, chinese, english=None, action_zh="", action_en="", *, code="unknown", **context):
+        self.chinese = chinese
+        self.english = english or short_reason(chinese)
+        self.action_zh, self.action_en = action_zh, action_en
+        self.code, self.context = code, context
+        self.reported = False
+        self.original = None
+        super().__init__(chinese)
+
+    def render(self, severity="error"):
+        zh, en = {"error": ("错误", "Error"), "warning": ("警告", "Warning"),
+                  "info": ("提示", "Info")}[severity]
+        lines = ["[{}] {}".format(zh, self.chinese)]
+        if self.action_zh:
+            lines.append(self.action_zh)
+        lines.append("[{}] {}".format(en, self.english))
+        if self.action_en:
+            lines.append(self.action_en)
+        return "\n".join(lines)
+
+    def __str__(self):
+        return self.render()
+
+
+class DiagnosticGroup(DiagnosticError):
+    def __init__(self, errors, notes=()):
+        self.errors = []
+        self.notes = list(notes)
+        seen = set()
+        for exc in errors:
+            error = as_diagnostic(exc) or format_error(None, None, "runtime", exc)
+            children = error.errors if isinstance(error, DiagnosticGroup) else [error]
+            if isinstance(error, DiagnosticGroup):
+                self.notes.extend(error.notes)
+            for child in children:
+                key = (child.code, child.chinese, child.english)
+                if key not in seen:
+                    seen.add(key)
+                    self.errors.append(child)
+        super().__init__("设备检查未通过。", "Device checks failed.", code="group")
+
+    def render(self, severity="error"):
+        blocks = [error.render(severity) for error in self.errors]
+        blocks.extend("{}\n{}".format(zh, en) for zh, en in dict.fromkeys(self.notes))
+        return "\n".join(blocks)
+
+
+def as_diagnostic(exc):
+    if isinstance(exc, DiagnosticError):
+        return exc
+    cached = getattr(exc, "_d1_diagnostic", None)
+    if cached is not None:
+        return cached
+    if len(getattr(exc, "args", ())) == 1 and isinstance(exc.args[0], DiagnosticError):
+        return exc.args[0]
+    return None
+
+
+def short_reason(exc):
+    # Original wording stays in the exception chain / D1_DEBUG output.
+    text = str(exc).splitlines()[0] if str(exc) else type(exc).__name__
+    text = text.replace("舵机", "关节")
+    return re.sub(r"\bservos?\b", "joint", text, flags=re.IGNORECASE)[:180]
+
+
+def failure(code, zh, en, action_zh, action_en, **context):
+    return DiagnosticError(zh, en, action_zh, action_en, code=code, **context)
+
+
+def configuration_error(name, actual, expected, expected_en=None):
+    return failure("P08", "{} 设置错误：{}；要求 {}。".format(name, actual, expected),
+                   "Invalid {}: {}; expected {}.".format(name, actual, expected if expected_en is None else expected_en),
+                   "请修改 {} 后重试。".format(name), "Correct {} and retry.".format(name))
+
+
+def validate_exo_ids(ids):
+    """Use the SDK protocol's 0..999 range; never rewrite configured IDs."""
+    if not isinstance(ids, (list, tuple, range)):
+        raise configuration_error("arm_exo_servo_ids", ids, "关节 ID 列表", "a list of joint IDs")
+    if not ids or any(type(sid) is not int or not 0 <= sid <= 999 for sid in ids):
+        raise configuration_error("arm_exo_servo_ids", ids, "0～999 范围内的整数", "integers in the range 0..999")
+    if len(set(ids)) != len(ids):
+        raise configuration_error("arm_exo_servo_ids", ids, "每个关节的 ID 不重复", "distinct joint IDs")
+
+
+def model_file_error(path):
+    return failure("P06", "找不到 URDF 文件：{}。".format(path), "URDF file not found: {}.".format(path),
+                   "请检查模型路径配置。", "Check the configured model path.")
+
+
+def missing_joints_error(names):
+    return failure("P07", "模型缺少需要的关节或手指：{}。".format(names),
+                   "The model is missing required joints or fingers: {}.".format(names),
+                   "请核对模型文件和关节配置。", "Check the model file and joint configuration.")
+
+
+def target_warning(zh="头臂关节", en="Head/arm joints"):
+    return failure("H05", "{}未到达目标（超时或无进展）。".format(zh), "{} did not reach the target (timeout or no progress).".format(en),
+                   "请检查关节是否受阻，以及目标角度是否超出限位。", "Check for obstruction and verify the target against joint limits.")
+
+
+def _remember(exc, diagnostic):
+    exc._d1_diagnostic = diagnostic
+    diagnostic.original = exc
+    return diagnostic
 
 
 def format_error(role, device, stage, exc):
-    """Keep machine-searchable context and the original error, then add advice."""
-    label, advice = role_help(role)
-    if "[device] {} port={} stage={}:".format(role, device, stage) in str(exc):
-        return str(exc)
-    cause = "{}: {}".format(type(exc).__name__, exc)
-    if isinstance(exc, subprocess.CalledProcessError) and exc.stderr:
-        cause += ": " + str(exc.stderr).strip()
-    if isinstance(exc, PermissionError):
-        advice = bilingual("权限不足：核对当前登录会话的 dialout/video 组权限，重新登录使新增组生效。", "Permission denied: check this session's dialout/video groups; log in again after adding a group.") + "\n" + advice
-    elif isinstance(exc, FileNotFoundError):
-        advice = bilingual("设备节点、文件或命令不存在：核对报错中的具体路径/命令；重新插拔后端口号可能变化。", "Device, file or command is missing: check the exact path/command; port numbers may change after reconnecting.") + "\n" + advice
-    elif isinstance(exc, (ValueError, TypeError)):
-        advice = bilingual("参数或数据格式不正确：先核对异常中点名的配置项、数值数量、范围及 SDK/模型版本。", "Invalid parameter or data format: first check the named setting, value count, range and SDK/model version.")
-    return ("[device] {} port={} stage={}: {}\n".format(role, device, stage, cause)
-            + bilingual("设备：{}；阶段：{}。".format(label, _STAGES.get(stage, stage)), "Device: {}; stage: {}.".format(role, stage))
-            + "\n" + bilingual("排查建议：", "Suggested checks:") + " " + advice)
-
-
-def report_error(exc, *, role=None, device="未指定 / unspecified", stage="runtime", file=None):
-    """For caught errors and entry points; do not discard the original message."""
-    if file is None:
-        file = sys.stderr
-    if any(word in str(exc).lower() for word in ("could not connect to display", "cvshowimage", "qt.qpa", "function is not implemented", "no display name")):
-        message = format_error("display", device, "visualization", exc)
-    elif role is not None:
-        message = format_error(role, device, stage, exc)
-    elif "排查建议：" in str(exc):
-        message = str(exc)
+    """Choose one next step; nested boundaries must not add more advice."""
+    existing = as_diagnostic(exc)
+    if existing is not None:
+        return existing
+    # SDK initialization reports a full failed-ID list; this is enough evidence
+    # to use the same chain analysis as the read-only startup check.
+    match = re.fullmatch(r"Servo ids not responding: (\[[\d, ]*\])", str(exc)) if role == "head_arm" else None
+    if match:
+        missing = ast.literal_eval(match.group(1))
+        expected = (11, 12, 21, 22, 23, 24, 25, 26)
+        if missing and set(missing).issubset(expected):
+            result = joint_read_error(role, device, missing, expected)
+            return _remember(exc, result)
+    match = re.fullmatch(r"SyncRead returned servo error id=(\d+) err=(\d+)", str(exc)) if role == "head_arm" else None
+    if match and int(match.group(2)):
+        sid, status = map(int, match.groups())
+        zh, en = joint_label(role, [sid])
+        result = failure("H04", "{}返回故障码 0x{:02x}。串口：{}。".format(zh, status, device),
+                         "{} reported fault 0x{:02x} on {}.".format((en[:1].upper() + en[1:]), status, device),
+                         "请停止运行，记录关节编号和故障码，按设备故障说明处理。",
+                         "Stop operation, record the joint number and code, and follow the device fault instructions.",
+                         role=role, device=device, joint_id=sid, fault=status, raw=str(exc))
+        return _remember(exc, result)
+    match = re.fullmatch(r"Failed to enable torque for servo ids: (\[[\d, ]*\])", str(exc)) if role == "head_arm" else None
+    if match:
+        ids = ast.literal_eval(match.group(1))
+        if ids:
+            zh, en = joint_label(role, ids)
+            result = failure("H06", "{}使能失败。串口：{}。".format(zh, device),
+                             "Could not enable {} on {}.".format(en, device),
+                             "请检查这些关节的供电和接头。", "Check power and connectors for the listed joints.",
+                             role=role, device=device, joint_ids=ids, raw=str(exc))
+            return _remember(exc, result)
+    match = re.match(r"(?:read1 failed|write1 failed|ReadPosSpeed failed|SyncRead returned servo error) id=(\d+)", str(exc)) if role == "head_arm" else None
+    if match:
+        sid = int(match.group(1))
+        zh, en = joint_label(role, [sid])
+        result = failure("H06", "{}通信失败。串口：{}。".format(zh, device),
+                         "Communication with {} failed on {}.".format(en, device),
+                         "请断电检查该关节的接头和上一段连接线。", "Power off and check its connectors and upstream cable.",
+                         role=role, device=device, joint_id=sid, raw=str(exc))
+        return _remember(exc, result)
+    zh, en = LABELS.get(role, ("当前操作", "operation"))
+    location = "（{}）".format(device) if device and device != "auto" else ""
+    at = " on {}".format(device) if device and device != "auto" else ""
+    reason = short_reason(exc)
+    context = dict(role=role, device=device, stage=stage, raw=str(exc), stderr=getattr(exc, "stderr", None))
+    errnum = getattr(exc, "errno", None)
+    failed_path = getattr(exc, "filename", None)
+    cause = exc.__cause__
+    # SDK wrappers may turn an OS error into RuntimeError. Use only an actual
+    # errno from the preserved cause, never words such as 'permission' alone.
+    visited = set()
+    while cause is not None and id(cause) not in visited:
+        visited.add(id(cause))
+        if errnum is None:
+            errnum = getattr(cause, "errno", None)
+        if failed_path is None:
+            failed_path = getattr(cause, "filename", None)
+        cause = cause.__cause__
+    if isinstance(exc, ModuleNotFoundError):
+        module = exc.name or reason
+        if module == "beingbeyond_d1_edu_sdk":
+            result = failure("P02", "当前 Python 环境没有安装 D1 SDK。", "The D1 SDK is not installed in this Python environment.",
+                             "请按本仓库 README 安装 SDK，再运行示例。", "Install the SDK using this repository's README, then retry.", **context)
+        else:
+            result = failure("P01", "当前 Python 环境缺少 {}。".format(module), "Module {} is missing from this Python environment.".format(module),
+                             "请在运行本示例的环境中，按 README 安装对应依赖。", "Install the required dependency in this environment using README.", **context)
     elif isinstance(exc, ImportError):
-        message = bilingual(
-            "依赖或 SDK 导入失败。确认使用安装 SDK 的同一 Python 环境；按本仓库 README 安装对应 Python 版本和 CPU 架构的 wheel 及所需选配依赖。NX 的 ARM64 wheel 不能用于 x86；Isaac Gym 等选配组件需确认平台支持。",
-            "Dependency or SDK import failed. Use the same Python environment where the SDK is installed. Follow this repository's README for the matching Python/CPU wheel and optional dependencies. NX ARM64 wheels cannot run on x86; check platform support for optional components such as Isaac Gym.") + "\n" + "{}: {}".format(type(exc).__name__, exc)
+        result = failure("P03", "无法加载模块：{}。".format(reason), "Could not load the module: {}.".format(reason),
+                         "请核对当前 Python 环境和模块安装版本。", "Check the Python environment and installed module version.", **context)
+    elif isinstance(exc, FileNotFoundError) and stage == "status check" and role in ("hand CAN", "can_iface"):
+        result = failure("P10", "缺少系统命令 ip，无法检查 CAN 接口。", "Command ip is missing; the CAN interface could not be checked.",
+                         "请安装 iproute2 后重试。", "Install iproute2 and retry.", **context)
+    elif isinstance(exc, PermissionError) or errnum in (errno.EACCES, errno.EPERM):
+        if failed_path is not None and failed_path != device:
+            result = failure("P06", "无法访问文件或命令：{}。".format(failed_path), "Access to file or command {} was denied.".format(failed_path),
+                             "请检查该路径的访问权限。", "Check access permissions for that path.", **context)
+            return _remember(exc, result)
+        if role in ("camera", "stereo camera", "head_arm", "exo", "glove"):
+            group = "video" if role in ("camera", "stereo camera") else "dialout"
+            action_zh = "请按 README 配置 {} 组权限，然后注销并重新登录。".format(group)
+            action_en = "Configure {} group access using README, then log out and back in.".format(group)
+        else:
+            action_zh, action_en = "请核对当前用户执行这项操作的权限。", "Check the current user's permissions for this operation."
+        result = failure("V04" if role in ("camera", "stereo camera") else "S06", "当前用户没有{}{}的访问权限。".format(zh, location), "Access to the {}{} was denied.".format(en, at),
+                         action_zh, action_en, **context)
+    elif (isinstance(exc, FileNotFoundError) or errnum == errno.ENOENT) and device and device != "auto" and (
+        failed_path == device or
+        failed_path is None and role in ("head_arm", "exo", "glove") and stage in ("open", "serial verification", "explicit serial verification")
+    ):
+        result = failure("S05", "{}设备不存在：{}。".format(zh, device), "The configured {} device does not exist: {}.".format(en, device),
+                         "请重新连接该设备的 USB 线，再核对配置路径。", "Reconnect its USB cable and check the configured path.", **context)
+    elif isinstance(exc, FileNotFoundError) or errnum == errno.ENOENT:
+        result = failure("P06", "找不到文件或命令：{}。".format(failed_path or reason), "File or command not found: {}.".format(failed_path or reason),
+                         "请核对报错中的路径或命令。", "Check the reported path or command.", **context)
+    elif isinstance(exc, (ValueError, TypeError)):
+        result = failure("P08", "参数或数据格式错误：{}。".format(reason), "Invalid parameter or data format: {}.".format(reason),
+                         "请核对报错中的参数、数值数量和取值范围。", "Check the named parameter, value count and range.", **context)
+    elif role == "display":
+        result = failure("V11", "图形窗口操作失败：{}。".format(reason), "Window operation failed: {}.".format(reason),
+                         "请先在本机桌面终端重试。", "Try again from the local desktop terminal.", **context)
+    elif role in ("camera", "stereo camera") and stage == "configure capture":
+        result = failure("P08", "相机{}采集设置失败：{}。".format(location, reason), "Could not configure camera capture{}: {}.".format(at, reason),
+                         "请核对相机格式和采集分辨率。", "Check the camera format and capture resolution.", **context)
+    elif role in ("camera", "stereo camera") and stage in ("read frame", "capture check"):
+        result = failure("V07", "相机{}未返回图像。".format(location), "Camera{} did not return an image.".format(at),
+                         "请重新插好相机 USB 线，再试一次。", "Reconnect the camera's USB cable and retry.", **context)
+    elif stage in ("close", "close_can"):
+        result = failure("X05", "关闭{}{}失败：{}。".format(zh, location, reason), "Could not close the {}{}: {}.".format(en, at, reason), "", "", **context)
+    elif stage in ("home_and_close", "open_hand"):
+        result = failure("X04", "{}{}{}失败。".format(zh, location, "回零" if stage == "home_and_close" else "张手"),
+                         "Could not {} the {}{}.".format("home" if stage == "home_and_close" else "open", en, at),
+                         "请确认当前姿态，并检查该设备的连接。", "Check its current pose and connection.", **context)
     else:
-        message = bilingual("示例运行失败。按完整异常中的文件、行号、配置项和设备角色定位问题；设备错误请核对对应 USB/CAN 线、供电和端口。反馈时附运行命令及完整异常。详见 docs/TROUBLESHOOTING.md。", "Example failed. Locate the file, line, setting and device role in the complete traceback. For device errors check the corresponding USB/CAN cable, power and port. Include the command and full traceback when reporting; see docs/TROUBLESHOOTING.md.") + "\n" + "{}: {}".format(type(exc).__name__, exc)
-    print("[错误 / ERROR] " + message, file=file)
+        operations = {
+            "set positions": ("发送关节位置", "sending joint positions"),
+            "set_positions": ("发送关节位置", "sending joint positions"),
+            "set_joint_pos": ("发送关节位置", "sending joint positions"),
+            "read positions": ("读取关节位置", "reading joint positions"),
+            "read_joint_pos": ("读取关节位置", "reading joint positions"),
+            "get_positions": ("读取关节位置", "reading joint positions"),
+            "get_positions_and_velocities": ("读取位置和速度", "reading positions and velocities"),
+            "read_frame": ("读取关节角度", "reading joint angles"),
+            "get_norm_values": ("读取数据", "reading data"),
+            "tactile read": ("读取触觉", "reading tactile data"),
+            "set_speed": ("设置速度", "setting speed"),
+            "set_torque": ("设置扭矩", "setting torque"),
+            "controller initialization": ("初始化", "initializing the controller"),
+        }
+        verb_zh, verb_en = operations.get(stage, ("", ""))
+        actions = {
+            "head_arm": ("请检查头臂控制器的 USB 线和机器人供电。", "Check the controller's USB cable and robot power."),
+            "exo": ("请检查遥操臂的 USB 线和供电。", "Check the exoskeleton's USB cable and power."),
+            "glove": ("请检查手套 USB 线是否松动。", "Check the glove USB connection."),
+            "hand CAN": ("请检查手部供电、PCAN USB 线和手部 CAN 线。", "Check hand power, PCAN USB and the hand's CAN cable."),
+            "can_iface": ("请检查 PCAN 连接和接口配置。", "Check the PCAN connection and interface configuration."),
+        }
+        action = actions.get(role, ("请保留完整错误信息并联系支持。", "Save the full error details and contact support."))
+        code = {"head_arm": "H06", "glove": "G02", "hand CAN": "C08"}.get(role, "X06") if verb_zh else "X06"
+        result = failure(code, "{}{}{}失败：{}。".format(zh, location, verb_zh, reason),
+                         "The {}{} failed{}: {}.".format(en, at, " while " + verb_en if verb_en else "", reason), *action, **context)
+    return _remember(exc, result)
+
+
+def report_error(exc, *, role=None, device=None, stage="runtime", file=None, severity="error"):
+    file = sys.stderr if file is None else file
+    with _REPORT_LOCK:
+        diagnostic = format_error(role, device, stage, exc)
+        leaves = diagnostic.errors if isinstance(diagnostic, DiagnosticGroup) else [diagnostic]
+        printed = [error for error in leaves if not error.reported]
+        for error in printed:
+            error.reported = True
+    for error in printed:
+        print(error.render(severity), file=file)
+    if printed and isinstance(diagnostic, DiagnosticGroup):
+        for zh, en in dict.fromkeys(diagnostic.notes):
+            print(zh + "\n" + en, file=file)
+    if printed and os.environ.get("D1_DEBUG") == "1":
+        traceback.print_exception(type(exc), exc, exc.__traceback__, file=file)
+        shown = set()
+        current = exc
+        while current is not None and id(current) not in shown:
+            shown.add(id(current))
+            current = current.__cause__ or current.__context__
+        records = [diagnostic] + printed if isinstance(diagnostic, DiagnosticGroup) else printed
+        for error in records:
+            if error.context:
+                print("[debug] {} {}".format(error.code, error.context), file=file)
+            original = error.original
+            if original is not None and id(original) not in shown:
+                traceback.print_exception(type(original), original, original.__traceback__, file=file)
+                shown.add(id(original))
 
 
 class BilingualArgumentParser(argparse.ArgumentParser):
     def error(self, message):
-        super().error(bilingual("命令行参数错误，请按下方英文原因核对参数名称/取值，并用 --help 查看用法。", "Invalid command-line arguments; check the reason below and use --help for usage.") + "\n" + message)
+        error = failure("P09", "命令行参数错误：{}。".format(short_reason(message)), "Invalid command-line arguments: {}.".format(message),
+                        "请运行 {} --help 查看用法。".format(self.prog), "Run {} --help for usage.".format(self.prog))
+        self.exit(2, str(error) + "\n")
 
 
 def install_error_hook():
-    """Install only for direct script execution, before third-party imports."""
-    previous = sys.excepthook
-
     def explain(exc_type, exc, tb):
-        previous(exc_type, exc, tb)
-        if not issubclass(exc_type, (KeyboardInterrupt, SystemExit)):
-            report_error(exc)
-
+        if issubclass(exc_type, KeyboardInterrupt):
+            return
+        report_error(exc)
     sys.excepthook = explain
 
 
 def require_display():
-    """Catch absent Linux desktop sessions before native Qt can abort Python."""
     if sys.platform.startswith("linux") and not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
-        _, advice = role_help("display")
-        raise RuntimeError(bilingual("没有可用的图形显示会话。", "No graphical display session is available.") + "\n" + advice)
+        raise failure("V10", "当前终端没有图形显示会话，无法打开窗口。", "No graphical display session is available for this terminal.",
+                      "请在本机桌面终端运行。", "Run from the local desktop terminal.")
+
+
+def joint_label(role, ids, expected=None):
+    """SDK mapping gives physical head/arm numbers; exo IDs are configurable."""
+    ids = tuple(ids)
+    if role == "head_arm" and all(sid in (11, 12, 21, 22, 23, 24, 25, 26) for sid in ids):
+        labels = []
+        for chain, base, zh, en in (((11, 12), 10, "头部", "head"), ((21, 22, 23, 24, 25, 26), 20, "臂部", "arm")):
+            numbers = [str(sid - base) for sid in chain if sid in ids]
+            if numbers:
+                labels.append(("{} {} 号关节".format(zh, "、".join(numbers)),
+                               "{} joint{} {}".format(en, "s" if len(numbers) > 1 else "", ", ".join(numbers))))
+        return "、".join(zh for zh, en in labels), ", ".join(en for zh, en in labels)
+    if role == "exo":
+        return ("遥操臂关节（通信 ID {}）".format("、".join(map(str, ids))),
+                "exoskeleton joint{} (ID{} {})".format("s" if len(ids) > 1 else "", "s" if len(ids) > 1 else "", ", ".join(map(str, ids))))
+    names_zh, names_en = [], []
+    for sid in ids:
+        if role == "head_arm" and sid in (11, 12):
+            zh, en = "头部 {} 号关节".format(sid - 10), "head joint {}".format(sid - 10)
+        elif role == "head_arm" and 21 <= sid <= 26:
+            zh, en = "臂部 {} 号关节".format(sid - 20), "arm joint {}".format(sid - 20)
+        else:
+            zh, en = "关节（通信 ID {}）".format(sid), "joint (ID {})".format(sid)
+        names_zh.append(zh)
+        names_en.append(en)
+    return "、".join(names_zh), ", ".join(names_en)
+
+
+def joint_read_error(role, device, missing, expected, baudrate=None, *, invalid=False):
+    missing = tuple(sid for sid in expected if sid in set(missing))
+    zh, en = joint_label(role, missing, expected)
+    all_missing = set(missing) == set(expected)
+    if all_missing:
+        name_zh, name_en = LABELS[role]
+        return failure("H02" if role == "head_arm" else "E01", "串口 {} 已打开，但{}关节均无有效应答。".format(device, "头臂" if role == "head_arm" else "遥操臂"),
+                       "Port {} opened, but none of the {} joints returned valid replies.".format(device, "head/arm" if role == "head_arm" else "exoskeleton"),
+                       "请检查{}供电，再核对端口和波特率 {}。".format(name_zh, baudrate or "（见配置）"),
+                       "Check {} power, then verify the port and baudrate {}.".format(name_en, baudrate or "in the configuration"),
+                       role=role, device=device, missing=missing)
+    if role == "head_arm":
+        head_missing = [sid for sid in missing if sid in (11, 12)]
+        arm_missing = [sid for sid in missing if 21 <= sid <= 26]
+        if head_missing and arm_missing:
+            return DiagnosticGroup([joint_read_error(role, device, part, expected, baudrate, invalid=invalid)
+                                    for part in (head_missing, arm_missing)])
+    # A link hint is justified only by a good prefix followed by an entirely bad suffix.
+    chains = [(11, 12), (21, 22, 23, 24, 25, 26)] if role == "head_arm" else []
+    boundaries = []
+    for chain in chains:
+        if not set(chain).issubset(expected):
+            continue
+        flags = [sid not in missing for sid in chain]
+        first_bad = next((i for i, good in enumerate(flags) if not good), len(chain))
+        if 0 < first_bad < len(chain) and not any(flags[first_bad:]):
+            left_zh, left_en = joint_label(role, [chain[first_bad - 1]], expected)
+            right_zh, right_en = joint_label(role, [chain[first_bad]], expected)
+            boundaries.append((left_zh, left_en, right_zh, right_en))
+    if boundaries:
+        azh = "请断电，优先检查" + "；".join("{}与{}之间的连线".format(a, c) for a, b, c, d in boundaries) + "。"
+        aen = "Power off and first check " + "; ".join("the cable between {} and {}".format(b, d) for a, b, c, d in boundaries) + "."
+    else:
+        azh, aen = ("请断电检查该关节的接头和上一段连接线。", "Power off and check its connectors and upstream cable.") if len(missing) == 1 else (
+            "请断电检查这些关节的接头和上一段连接线。", "Power off and check their connectors and upstream cable.")
+    return failure("H03" if role == "head_arm" else "E02", "{}{}。串口：{}。".format(zh, "读数无效" if invalid else "无应答", device),
+                   "{} {} on {}.".format((en[:1].upper() + en[1:]), "returned invalid readings" if invalid else "did not respond", device), azh, aen,
+                   role=role, device=device, missing=missing)
 
 
 _EXO_WARNINGS = {}
 
 
-def warn_exo_readings(valid, servo_ids, device):
-    """Surface invalid SDK readings without changing teleop fallback behavior."""
-    missing = [sid for i, sid in enumerate(servo_ids) if i >= len(valid) or not valid[i]]
+def warn_exo_readings(valid, servo_ids, device, min_valid=None):
+    missing = tuple(sid for i, sid in enumerate(servo_ids) if i >= len(valid) or not valid[i])
+    previous = _EXO_WARNINGS.get(device)
     if not missing:
-        _EXO_WARNINGS.pop(device, None)
+        if previous is not None:
+            print("[提示] 遥操臂读数已恢复。\n[Info] Exoskeleton readings have recovered.", file=sys.stderr)
+            _EXO_WARNINGS.pop(device, None)
         return
-    now = time.monotonic()
-    if device not in _EXO_WARNINGS or now - _EXO_WARNINGS[device] >= 5.0:
-        _EXO_WARNINGS[device] = now
-        print("[警告 / WARNING] " + format_error("exo", device, "read_frame", RuntimeError(
-            bilingual("遥操臂以下舵机 ID 读数无效：{}；无效通道沿用原有保持/等待策略。".format(missing),
-                      "Invalid exoskeleton servo readings for IDs {}; existing hold/wait behavior is retained.".format(missing)))), file=sys.stderr)
+    if previous == missing:
+        return
+    _EXO_WARNINGS[device] = missing
+    error = joint_read_error("exo", device, missing, servo_ids, invalid=True)
+    if min_valid is not None:
+        if sum(valid) < min_valid:
+            error.chinese += " 本次未更新机械臂目标。"
+            error.english += " The arm target was not updated this cycle."
+        else:
+            error.chinese += " 对应关节本次保持原目标。"
+            error.english += " Those joints kept their previous targets this cycle."
+    report_error(error, severity="warning")

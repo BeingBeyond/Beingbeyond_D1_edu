@@ -4,6 +4,9 @@ Serial probes only listen or read registers/positions. They never enable torque,
 move joints, calibrate, change IDs, or instantiate SDK controllers. USB IDs are
 candidate filters, not proof of a device's role. Serial numbers are not required.
 """
+
+from diagnostics import configuration_error, failure
+
 import argparse
 from contextlib import contextmanager
 import json
@@ -18,9 +21,12 @@ import struct
 import subprocess
 import time
 
-from diagnostics import bilingual, format_error, role_help, install_error_hook, BilingualArgumentParser, report_error
+from diagnostics import DiagnosticError, DiagnosticGroup, as_diagnostic, format_error, joint_label, joint_read_error, install_error_hook, BilingualArgumentParser, report_error, LABELS
+from diagnostics import validate_exo_ids
 
 if __name__ == "__main__":
+    if "--debug" in sys.argv:
+        os.environ["D1_DEBUG"] = "1"
     install_error_hook()
 
 import serial
@@ -39,8 +45,7 @@ CAMERA_USB_IDS = {(0x15AA, 0x1955)}
 ANGLE_RE = re.compile(r"=\s*([-+]?\d+(?:\.\d+)?)")
 
 
-class DeviceDetectionError(RuntimeError):
-    pass
+DeviceDetectionError = DiagnosticError
 
 
 @contextmanager
@@ -49,20 +54,30 @@ def device_operation(role, device, stage):
     try:
         yield
     except Exception as exc:
-        raise DeviceDetectionError(format_error(role, device, stage, exc)) from exc
+        if as_diagnostic(exc) is not None:
+            raise
+        raise format_error(role, device, stage, exc) from exc
 
 
 def _unique(role, candidates, details=()):
-    if len(candidates) != 1:
-        reason = "未找到通过验证的设备 / no verified device" if not candidates else "存在多个匹配设备，请显式指定目标端口 / ambiguous devices: " + ", ".join(candidates)
-        label, advice = role_help(role)
-        extra = "\n  " + "\n  ".join(details) if details else ""
-        raise DeviceDetectionError(
-            "[auto] {}: {}. 自动识别失败：没有唯一通过验证的设备。 / Discovery failed. Connect one matching device, stop programs using it, "
-            "or set an explicit device instead of 'auto'.{}\n{}\n排查建议： / Suggested checks: {}".format(role, reason, extra, label, advice)
-        )
-    print("[auto] 已识别 / Resolved {} -> {}".format(role, candidates[0]))
-    return candidates[0]
+    if len(candidates) == 1:
+        return candidates[0]
+    zh, en = LABELS[role]
+    if candidates:
+        zh = "PCAN 接口" if role == "hand CAN" else zh
+        plural = "PCAN interfaces" if role == "hand CAN" else en + " devices"
+        raise failure("S04", "找到多个{}：{}，无法自动选择。".format(zh, "、".join(candidates)),
+                      "Multiple matching {} were found: {}.".format(plural, ", ".join(candidates)),
+                      "请拔下多余设备，或显式填写要使用的设备路径。", "Disconnect the extra devices or explicitly select a device path.",
+                      role=role, candidates=candidates, details=details)
+    if role == "hand CAN":
+        raise failure("C01", "未识别到 PCAN 接口。", "No matching PCAN interface was found.",
+                      "请插好 PCAN 的 USB 线；若已插好，再检查 PCAN 驱动。", "Check the PCAN USB connection, then the PCAN driver if it is already connected.", details=details)
+    if role == "stereo camera":
+        raise failure("V01", "未识别到双目相机。", "No matching stereo camera was found.",
+                      "请检查相机自己的 USB 线。", "Check the camera's own USB cable.", details=details)
+    raise failure("S01", "未识别到{}的 USB 串口。".format(zh), "No matching USB serial port was found for the {}.".format(en),
+                  "请重新插好{}的 USB 线，再试一次。".format(zh), "Reconnect the {} USB cable and try again.".format(en), role=role)
 
 
 def _serial_candidates():
@@ -99,7 +114,9 @@ def _port_users(device):
 def _open_probe(device, baudrate):
     users = _port_users(device)
     if users:
-        raise DeviceDetectionError("串口被占用，请先确认 PID 对应程序并正常退出 / {} is busy (PID {}); stop its owner before probing".format(device, ", ".join(users)))
+        raise failure("S07", "串口 {} 正被进程 {} 占用。".format(device, ", ".join(users)),
+                      "Port {} is in use by process {}.".format(device, ", ".join(users)),
+                      "请确认并退出对应程序，再运行本示例。", "Identify and close that program, then run this example again.", device=device, pids=users)
     # Set line states before opening; some hardware can still reset on open.
     port = serial.Serial(port=None, baudrate=baudrate, timeout=0.03,
                          write_timeout=0.15, exclusive=True)
@@ -180,10 +197,12 @@ def _probe_head_arm(port):
                 data.extend(port.read(32))
                 error = _head_arm_error(data, servo_id)
                 if error is not None:
-                    raise DeviceDetectionError(
-                        "头臂舵机已回复故障码，请按 ID 核对供电、负载及接线，不能视为舵机缺失 / head/arm servo ID {} replied with error status 0x{:02x}; "
-                        "the servo is present but reports a fault".format(servo_id, error)
-                    )
+                    zh, en = joint_label("head_arm", [servo_id])
+                    raise failure("H04", "{}返回故障码 0x{:02x}。".format(zh, error),
+                                  "{} reported fault 0x{:02x}.".format((en[:1].upper() + en[1:]), error),
+                                  "请停止运行，记录关节编号和故障码，按设备故障说明处理。",
+                                  "Stop operation, record the joint number and code, and follow the device fault instructions.",
+                                  joint_id=servo_id, fault=error)
                 if _head_arm_reply(data, servo_id):
                     matched = True
                     break
@@ -217,70 +236,80 @@ def _probe_exo(port, servo_ids):
     return missing
 
 
+def _glove_error(device, baudrate):
+    return failure("G01", "串口 {} 已打开，但未收到有效手套数据。".format(device),
+                   "Port {} opened, but no valid glove data was received.".format(device),
+                   "请检查手套 USB 线，并核对手套端口和波特率 {}。".format(baudrate),
+                   "Check the glove USB cable, configured port and baudrate {}.".format(baudrate), device=device)
+
+
+def _wrong_glove(device):
+    return failure("H01", "头臂串口 {} 实际连接的是手套。".format(device),
+                   "The configured head/arm port {} is connected to the glove.".format(device),
+                   "请将头臂串口配置改为头臂控制器对应的端口。", "Set the head/arm port to the robot controller's port.", device=device)
+
+
 def resolve_serial_ports(requests, baudrates=None, exo_servo_ids=(1, 2, 3, 4, 5, 6),
                          verify_explicit=False):
-    """Resolve roles together; optionally verify explicit paths without USB filters.
-
-    A busy/unreadable candidate is an error even if another candidate matches:
-    the inaccessible device could otherwise hide a second matching controller.
-    """
+    if "exo" in requests:
+        validate_exo_ids(exo_servo_ids)
     unknown = set(requests) - set(SERIAL_USB_IDS)
     if unknown:
-        raise ValueError("未知串口角色，请检查 requests 配置 / Unknown serial roles: {}".format(sorted(unknown)))
+        raise configuration_error("serial roles", sorted(unknown), "head_arm / exo / glove")
     rates = dict(SERIAL_BAUDRATES, **(baudrates or {}))
     resolved = {role: path for role, path in requests.items() if path != "auto"}
     automatic = set(requests) - set(resolved)
-    occupied_paths = {os.path.realpath(path) for path in resolved.values()}
     assignments = {}
     for role, path in resolved.items():
         assignments.setdefault(os.path.realpath(path), []).append(role)
-    duplicates = ["{} -> {}".format(path, ", ".join(roles))
-                  for path, roles in assignments.items() if len(roles) > 1]
-    if duplicates:
-        raise DeviceDetectionError("同一串口不能分配给多个角色，请分别核对头臂、遥操臂和手套 USB 线及端口配置 / The same serial port was assigned to multiple roles: " + "; ".join(duplicates))
+    for path, roles in assignments.items():
+        if len(roles) > 1:
+            zh = "和".join(LABELS[role][0] for role in roles)
+            en = " and ".join(LABELS[role][1] for role in roles)
+            raise failure("S09", "{}使用了同一串口：{}。".format(zh, path),
+                          "{} use the same serial port: {}.".format((en[:1].upper() + en[1:]), path),
+                          "请核对两根 USB 线对应的端口，并修改配置。", "Check which port belongs to each USB connection and correct the settings.", device=path, roles=roles)
     matches = {role: [] for role in automatic}
     details = {role: [] for role in automatic}
-    blocked = {role: False for role in automatic}
-    candidates = _serial_candidates() if automatic else {}
+    blocked = set()
+    # Physical ttyS ports are irrelevant to USB discovery, including its failure output.
+    candidates = {dev: info for dev, info in (_serial_candidates() if automatic else {}).items()
+                  if info.vid is not None or dev.startswith(("/dev/ttyUSB", "/dev/ttyACM"))}
     for device, info in sorted(candidates.items()):
         roles = {role for role in automatic if (info.vid, info.pid) in SERIAL_USB_IDS[role]}
-        if not roles or device in occupied_paths:
-            for role in automatic:
-                identity = "{:04x}:{:04x}".format(info.vid, info.pid) if info.vid is not None and info.pid is not None else "unknown"
-                reason = "已被显式指定给其他角色 / reserved by an explicit role" if device in occupied_paths else "USB 型号与此角色不符 / USB identity does not match this role"
-                details[role].append("候选设备已排除 / {}: USB {} excluded: {}".format(device, identity, reason))
+        if device in assignments or not roles:
             continue
         try:
             if roles & {"head_arm", "glove"}:
-                # Listen first, even when only the head is requested. Never send
-                # binary head queries to an already identified glove.
+                # Listen first. Never send head queries to an identified glove.
                 with _open_probe(device, rates["glove"]) as port:
                     is_glove = _probe_glove(port)
                     if is_glove:
                         if "glove" in roles:
                             matches["glove"].append(device)
                         if "head_arm" in roles:
-                            details["head_arm"].append("此端口实际为手套，请检查头臂 USB 线并修正端口配置 / {}: identified as glove; not a head/arm controller".format(device))
-                    elif "head_arm" in roles:
-                        port.baudrate = rates["head_arm"]
-                        missing = _probe_head_arm(port)
-                        if not missing:
-                            matches["head_arm"].append(device)
-                        else:
-                            details["head_arm"].append("以下头臂舵机 ID 未收到有效应答；请核对头臂 USB、供电、波特率，断电后检查对应 ID 及上游串联线；无应答不能证明舵机损坏 / {}: no valid head/arm reply for IDs {}; check power, baudrate, wiring or corrupt replies".format(device, missing))
-                    if not is_glove and "glove" in roles:
-                        details["glove"].append("手套未连续输出有效的 6 路角度数据，检查手套 USB 线、供电、串口及 115200 波特率 / {}: no consecutive valid ANGLES frames".format(device))
+                            details["head_arm"].append(_wrong_glove(device))
+                    else:
+                        if "head_arm" in roles:
+                            port.baudrate = rates["head_arm"]
+                            missing = _probe_head_arm(port)
+                            if missing:
+                                details["head_arm"].append(joint_read_error("head_arm", device, missing, HEAD_ARM_IDS, rates["head_arm"]))
+                            else:
+                                matches["head_arm"].append(device)
+                        if "glove" in roles:
+                            details["glove"].append(_glove_error(device, rates["glove"]))
             if "exo" in roles:
                 with _open_probe(device, rates["exo"]) as port:
                     missing = _probe_exo(port, exo_servo_ids)
-                    if not missing:
-                        matches["exo"].append(device)
+                    if missing:
+                        details["exo"].append(joint_read_error("exo", device, missing, exo_servo_ids, rates["exo"]))
                     else:
-                        details["exo"].append("以下遥操臂舵机 ID 应答缺失或无效，请检查遥操臂 USB 线、供电、波特率，断电后检查对应 ID 的舵机线及上游接头 / {}: exo IDs missing/invalid: {}".format(device, missing))
+                        matches["exo"].append(device)
         except (OSError, serial.SerialException, DeviceDetectionError) as exc:
             for role in roles:
-                blocked[role] = True
-                details[role].append("{} at {} baud: {}".format(device, rates[role], exc))
+                blocked.add(role)
+                details[role].append(format_error(role, device, "serial verification", exc))
     errors = []
     if verify_explicit:
         for role, device in resolved.items():
@@ -289,36 +318,47 @@ def resolve_serial_ports(requests, baudrates=None, exo_servo_ids=(1, 2, 3, 4, 5,
                     with _open_probe(device, rates[role]) as port:
                         if role == "glove":
                             if not _probe_glove(port):
-                                raise DeviceDetectionError("手套缺少连续有效 ANGLES 数据，请核对手套连线及波特率 / no consecutive valid ANGLES frames")
+                                raise _glove_error(device, rates[role])
                         elif role == "head_arm":
                             port.baudrate = rates["glove"]
                             if _probe_glove(port):
-                                raise DeviceDetectionError("端口实际连接手套，请重新核对头臂 USB 线和端口配置 / identified as glove; not a head/arm controller")
+                                raise _wrong_glove(device)
                             port.baudrate = rates[role]
                             missing = _probe_head_arm(port)
                             if missing:
-                                raise DeviceDetectionError("以下头臂舵机 ID 未有效应答；核对供电及波特率，断电后检查对应舵机和上游串联线 / no valid head/arm reply for IDs {}".format(missing))
+                                raise joint_read_error(role, device, missing, HEAD_ARM_IDS, rates[role])
                         else:
                             missing = _probe_exo(port, exo_servo_ids)
                             if missing:
-                                raise DeviceDetectionError("以下遥操臂舵机 ID 未有效应答；核对供电及波特率，断电后检查对应 ID 和上游串联线 / exo IDs missing/invalid: {}".format(missing))
+                                raise joint_read_error(role, device, missing, exo_servo_ids, rates[role])
             except DeviceDetectionError as exc:
-                errors.append(str(exc))
+                errors.append(exc)
     for role in sorted(automatic):
         try:
-            if blocked[role]:
-                label, advice = role_help(role)
-                raise DeviceDetectionError("[auto] {} stage=serial verification: 候选串口无法验证，请先处理下方原因 / a candidate could not be verified.\n  {}\n{}\n排查建议： / Suggested checks: {}".format(role, "\n  ".join(details[role]), label, advice))
-            if not candidates:
-                details[role].append("未枚举到串口，请检查对应设备 USB 线、供电和驱动 / serial inventory is empty; check USB connection and driver enumeration")
-            resolved[role] = _unique(role, matches[role], details[role])
+            if role in blocked:
+                errors.extend(details[role])
+                continue
+            if matches[role]:
+                resolved[role] = _unique(role, matches[role])
+            elif details[role]:
+                errors.extend(details[role])
+            else:
+                available = [dev for dev in candidates if dev not in assignments]
+                if available:
+                    zh, en = LABELS[role]
+                    raise failure("S03", "已发现 USB 串口 {}，但无法自动确认哪个连接{}。".format("、".join(available), zh),
+                                  "USB serial ports {} were found, but none could be selected automatically for the {}.".format(", ".join(available), en),
+                                  "请对照拔插确认端口，再将它填入当前示例的{}串口配置。".format(zh),
+                                  "Identify the port by reconnecting the device, then enter it in this example's {} port setting.".format(en), candidates=available, role=role)
+                resolved[role] = _unique(role, [])
         except DeviceDetectionError as exc:
-            errors.append(str(exc))
+            errors.append(exc)
     if errors:
-        raise DeviceDetectionError("\n".join(errors))
+        raise DiagnosticGroup(errors)
     paths = [os.path.realpath(path) for path in resolved.values()]
     if len(set(paths)) != len(paths):
-        raise DeviceDetectionError("同一串口不能分配给多个设备角色，请分别连接头臂、遥操臂和手套 USB 线并核对配置 / The same serial port was assigned to multiple roles")
+        raise failure("S09", "同一串口被分配给多个设备。", "Multiple devices were assigned the same serial port.",
+                      "请核对端口配置。", "Check the port settings.")
     return resolved
 
 
@@ -392,6 +432,8 @@ def resolve_devices(head_arm=None, exo=None, glove=None, can_iface=None, camera=
     Readiness checks never configure CAN: it must already be UP at hand_baud.
     Passive failures are collected together; serial probes are then skipped.
     """
+    if exo is not None:
+        validate_exo_ids(exo_servo_ids)
     result = {}
     errors = []
     for role, device, resolver in (("can_iface", can_iface, resolve_can_iface),
@@ -402,16 +444,18 @@ def resolve_devices(head_arm=None, exo=None, glove=None, can_iface=None, camera=
             with device_operation(role, device, "discovery"):
                 result[role] = resolver(device)
         except DeviceDetectionError as exc:
-            errors.append(str(exc))
+            errors.append(exc)
     if check_ready:
         errors.extend(_check_peripherals(result, hand_type, hand_baud))
     requests = {role: value for role, value in
                 (("head_arm", head_arm), ("exo", exo), ("glove", glove)) if value is not None}
     if errors:
         if requests:
-            errors.append("[check] CAN/相机预检查失败，以下串口角色尚未检查（不表示已通过） / serial verification skipped because peripheral checks failed: " +
-                          ", ".join("{}={}".format(role, path) for role, path in requests.items()))
-        raise DeviceDetectionError("\n".join(errors))
+            notes = [("尚未检查：{}。请处理以上问题后重试。".format("、".join(LABELS[r][0] for r in requests)),
+                      "Not checked: {}. Resolve the errors above and retry.".format(", ".join(LABELS[r][1] for r in requests)))]
+        else:
+            notes = []
+        raise DiagnosticGroup(errors, notes)
     if requests:
         with device_operation("serial roles", str(requests), "discovery/verification"):
             result.update(resolve_serial_ports(requests,
@@ -429,7 +473,7 @@ def _check_peripherals(devices, hand_type, hand_baud):
             elif role == "camera":
                 check_camera(device)
         except Exception as exc:
-            errors.append("[device] {} port={} stage=communication check: {}".format(role, device, exc))
+            errors.append(format_error(role, device, "communication check", exc))
     return errors
 
 
@@ -441,16 +485,36 @@ def check_can(iface, hand_type="right", bitrate=1_000_000):
 def _check_can(iface, hand_type, bitrate):
     """Read fresh hand joint status on an already configured bus; never set it up."""
     if hand_type not in ("left", "right"):
-        raise ValueError("hand_type 仅支持 left（左手）或 right（右手），请修改配置 / hand_type must be left or right")
-    status = subprocess.run(["ip", "-json", "-details", "link", "show", "dev", iface],
-                            check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=2)
-    link = json.loads(status.stdout)[0]
+        raise configuration_error("hand_type", hand_type, "left / right")
+    try:
+        status = subprocess.run(["ip", "-json", "-details", "link", "show", "dev", iface],
+                                check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=2)
+    except subprocess.CalledProcessError as exc:
+        if "does not exist" in (exc.stderr or "") or "Cannot find device" in (exc.stderr or ""):
+            raise failure("C02", "CAN 接口 {} 不存在。".format(iface), "CAN interface {} does not exist.".format(iface),
+                          "请用 ip link show 查看实际接口名，并修改 CAN 配置。", "Check the interface name with ip link show and update the CAN setting.") from exc
+        raise
+    links = json.loads(status.stdout)
+    if not links:
+        raise failure("C02", "CAN 接口 {} 不存在。".format(iface), "CAN interface {} does not exist.".format(iface),
+                      "请用 ip link show 查看实际接口名，并修改 CAN 配置。", "Check the interface name with ip link show and update the CAN setting.")
+    link = links[0]
     bus = link.get("linkinfo", {}).get("info_data", {})
-    if "UP" not in link.get("flags", []) or bus.get("bittiming", {}).get("bitrate") != bitrate:
-        raise DeviceDetectionError("CAN 未就绪：请先核对 PCAN 接口、供电和接线，再按 README 配置为 UP 及指定波特率；本检查不会自动配置总线 / {} must already be UP at {} bit/s for this read-only check; "
-                                   "configure the confirmed PCAN interface first (see lib/pcan/README.md)".format(iface, bitrate))
-    if bus.get("state") in ("BUS-OFF", "STOPPED", "SLEEPING"):
-        raise DeviceDetectionError("CAN 状态异常：检查手部供电、CAN_H/CAN_L 和终端电阻，确认后按 README 恢复 / {} CAN state is {}; check wiring and recover the bus".format(iface, bus["state"]))
+    if bus.get("state") == "BUS-OFF":
+        raise failure("C05", "CAN 接口 {} 已进入 BUS-OFF 状态。".format(iface), "CAN interface {} is BUS-OFF.".format(iface),
+                      "请先检查手部供电和 CAN 接线，再按 README 恢复接口。", "Check hand power and CAN wiring, then recover the interface using README.")
+    if "UP" not in link.get("flags", []):
+        raise failure("C03", "CAN 接口 {} 尚未启动。".format(iface), "CAN interface {} is down.".format(iface),
+                      "请按 README 启动这个接口，再运行示例。", "Bring up this interface using README, then retry.")
+    actual = bus.get("bittiming", {}).get("bitrate")
+    if bus.get("state") in ("STOPPED", "SLEEPING") or actual is None:
+        raise failure("C07", "CAN 接口 {} 未就绪，状态：{}。".format(iface, bus.get("state", "无法读取")),
+                      "CAN interface {} is not ready. State: {}.".format(iface, bus.get("state", "unavailable")),
+                      "请按 README 检查接口配置。", "Check its configuration using README.")
+    if actual != bitrate:
+        raise failure("C04", "CAN 波特率不符：当前 {}，需要 {} bit/s。接口：{}。".format(actual, bitrate, iface),
+                      "CAN bitrate mismatch on {}: {}, expected {} bit/s.".format(iface, actual, bitrate),
+                      "请按 README 修改该接口的波特率。", "Set the interface bitrate using README.")
     hand_id = 0x27 if hand_type == "right" else 0x28
     with socket.socket(socket.PF_CAN, socket.SOCK_RAW, socket.CAN_RAW) as bus_socket:
         bus_socket.setsockopt(socket.SOL_CAN_RAW, socket.CAN_RAW_FILTER,
@@ -470,7 +534,9 @@ def _check_can(iface, hand_type, bitrate):
                 if can_id == hand_id and length == 7 and payload[0] == 1:
                     print("[check] 已收到手部状态 / {}: {} hand status received (ID 0x{:02x})".format(iface, hand_type, hand_id))
                     return
-    raise DeviceDetectionError("未收到新的手部应答：核对左右手配置、手部电源、PCAN USB 和 CAN 线；接口 UP 不等于手部有应答 / {}: no fresh {} hand status response".format(iface, hand_type))
+    raise failure("C06", "{}手未返回状态。CAN 接口：{}。".format("左" if hand_type == "left" else "右", iface),
+                  "No status reply from the {} hand on {}.".format(hand_type, iface),
+                  "请检查这只手的电源和 CAN 线，并确认左右手配置。", "Check its power and CAN cable, and verify the selected hand side.")
 
 
 def check_camera(device):
@@ -484,17 +550,24 @@ def _check_camera(device):
 
     users = _port_users(device)
     if users:
-        raise DeviceDetectionError("设备被占用，请先确认 PID 对应程序并正常退出 / {} is busy (PID {})".format(device, ", ".join(users)))
+        raise failure("V05", "相机 {} 正被进程 {} 占用。".format(device, ", ".join(users)),
+                      "Camera {} is in use by process {}.".format(device, ", ".join(users)),
+                      "请退出对应的相机程序后重试。", "Close that camera application and retry.")
     cap = cv2.VideoCapture(device, cv2.CAP_V4L2)
     try:
         if not cap.isOpened():
-            raise DeviceDetectionError("无法打开相机，请检查相机 USB 线、video 权限和占用 / Cannot open camera: " + device)
+            raise failure("V06", "无法打开相机：{}。".format(device), "Could not open camera {}.".format(device),
+                          "请先退出其他使用相机的程序，再重新插好相机 USB 线。", "Close other camera applications, then reconnect its USB cable.")
         cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
         ok, frame = cap.read()
-        if not ok or frame is None or frame.shape[0] < 480 or frame.shape[1] < 1280:
-            raise DeviceDetectionError("相机没有返回有效的 1280×480 双目图像，请核对 MJPG 格式、USB 线和带宽 / Camera did not return the expected stereo-sized frame: " + device)
+        if not ok or frame is None:
+            raise format_error("stereo camera", device, "capture check", TimeoutError("No frame"))
+        if frame.shape[0] < 480 or frame.shape[1] < 1280:
+            raise failure("V08", "相机图像尺寸不符：实际 {}×{}，需要至少 1280×480。".format(frame.shape[1], frame.shape[0]),
+                          "Camera frame size mismatch: got {}x{}, need at least 1280x480.".format(frame.shape[1], frame.shape[0]),
+                          "请核对相机设备和采集分辨率。", "Check the selected camera and capture resolution.")
         print("[check] 已采集图像 / {}: captured {}x{}".format(device, frame.shape[1], frame.shape[0]))
     finally:
         cap.release()
@@ -502,16 +575,25 @@ def _check_camera(device):
 
 def main():
     parser = BilingualArgumentParser(description=__doc__)
+    parser.add_argument("--debug", action="store_true", help="显示完整异常 / Show full error details")
     parser.add_argument("--list", action="store_true", help="仅列出串口 USB 信息，不打开设备 / List serial USB identities only; do not open devices")
     parser.add_argument("--check", action="store_true", help="额外读取 CAN 状态和相机图像，不发送运动命令 / Also read CAN status and capture a camera frame; no robot motion")
     parser.add_argument("--roles", nargs="+", default=["head_arm", "exo", "glove", "can", "camera"],
                         choices=["head_arm", "exo", "glove", "can", "camera"])
     parser.add_argument("--hand-type", choices=["left", "right"], default="right")
     args = parser.parse_args()
+    if args.debug:
+        os.environ["D1_DEBUG"] = "1"
     try:
         if args.list:
+            found = False
             for device, port in sorted(_serial_candidates().items()):
+                if port.vid is None and not device.startswith(("/dev/ttyUSB", "/dev/ttyACM")):
+                    continue
                 print("{}: {} VID:PID={} serial={}".format(device, port.description, port.hwid, port.serial_number))
+                found = True
+            if not found:
+                print("未发现可识别的 USB 串口。\nNo recognizable USB serial ports were found.")
             return 0
         roles = set(args.roles)
         requests = {role: "auto" for role in roles if role in SERIAL_USB_IDS}
@@ -519,8 +601,17 @@ def main():
             requests["can_iface"] = "auto"
         if "camera" in roles:
             requests["camera"] = "auto"
-        resolve_devices(**requests, check_ready=args.check, hand_type=args.hand_type)
-        print("[check] 指定设备已识别；是否检查 CAN/相机通信取决于 --check，未创建机器人控制器 / Requested devices resolved successfully; no robot controller was created.")
+        devices = resolve_devices(**requests, check_ready=args.check, hand_type=args.hand_type)
+        if args.check:
+            print("设备检查通过。\nDevice checks passed.")
+        else:
+            print("设备识别完成：{}。\nDevices detected: {}.".format(
+                "、".join("{} {}".format(LABELS[role][0], path) for role, path in devices.items()),
+                ", ".join("{} {}".format(LABELS[role][1], path) for role, path in devices.items())))
+            pending = [LABELS[role] for role in ("can_iface", "camera") if role in devices]
+            if pending:
+                print("尚未检查通信：{}（使用 --check 检查）。\nCommunication not checked: {} (use --check).".format(
+                    "、".join(zh for zh, en in pending), ", ".join(en for zh, en in pending)))
         return 0
     except (DeviceDetectionError, OSError, subprocess.SubprocessError) as exc:
         report_error(exc, file=sys.stdout)

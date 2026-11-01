@@ -9,6 +9,9 @@ Pipeline:
 Press q in the OpenCV camera window, or close the Isaac Gym viewer, to exit.
 """
 
+from diagnostics import configuration_error, missing_joints_error, failure
+
+
 from diagnostics import install_error_hook, report_error, require_display
 
 if __name__ == "__main__":
@@ -206,14 +209,14 @@ def create_sim(gym, cfg: SimCfg) -> gymapi.Sim:
 
     sim = gym.create_sim(cfg.compute_device_id, cfg.graphics_device_id, cfg.physics_engine, sim_params)
     if sim is None:
-        raise RuntimeError("无法创建仿真，请核对 Isaac Gym、GPU 驱动及计算设备编号 / Failed to create sim")
+        raise failure("P11", "无法创建 Isaac Gym 仿真。设备编号：{}。".format(cfg.compute_device_id), "Could not create the Isaac Gym simulation on device {}.".format(cfg.compute_device_id), "请检查 GPU 驱动和仿真设备编号。", "Check the GPU driver and simulation device ID.")
     return sim
 
 
 def create_viewer(gym, sim) -> gymapi.Viewer:
     viewer = gym.create_viewer(sim, gymapi.CameraProperties())
     if viewer is None:
-        raise RuntimeError("无法创建仿真窗口，请核对桌面显示会话和图形驱动 / Failed to create viewer")
+        raise failure("V11", "无法创建仿真窗口。", "Could not create the simulation window.", "请先在本机桌面终端重试。", "Try again from the local desktop terminal.")
     return viewer
 
 
@@ -280,7 +283,7 @@ def apply_initial_head_arm_pose(
     cfg: HeadArmCfg,
 ) -> None:
     if len(cfg.q_init_deg) != len(HEAD_ARM_JOINT_NAMES):
-        raise ValueError(f"q_init_deg 的角度数量不符，请核对头臂配置 / q_init_deg must contain {len(HEAD_ARM_JOINT_NAMES)} values")
+        raise configuration_error("q_init_deg", len(cfg.q_init_deg), len(HEAD_ARM_JOINT_NAMES))
 
     q_init_rad = np.deg2rad(np.asarray(cfg.q_init_deg, dtype=np.float64))
     for name, q in zip(HEAD_ARM_JOINT_NAMES, q_init_rad):
@@ -352,10 +355,7 @@ def infer_finger_indices(joint_names) -> Dict[str, Tuple[int, ...]]:
 
     missing = [finger for finger, values in indices.items() if not values]
     if missing:
-        raise RuntimeError(
-            f"无法确定以下手指的关节索引，请核对重定向配置、URDF 和关节名 / Cannot infer finger qpos indices for {missing}. "
-            f"Retargeting joints are: {list(joint_names)}"
-        )
+        raise missing_joints_error(missing)
     return {finger: tuple(values) for finger, values in indices.items()}
 
 
@@ -639,7 +639,8 @@ def main() -> None:
                 )
                 with device_operation("display", "OpenCV", "visualization"):
                     cv2.imshow(window_name, overlay)
-                if cv2.waitKey(1) & 0xFF == ord("q"):
+                    key = cv2.waitKey(1) & 0xFF
+                if key == ord("q"):
                     break
 
                 gym.simulate(sim)

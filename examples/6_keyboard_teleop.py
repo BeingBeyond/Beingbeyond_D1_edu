@@ -25,7 +25,7 @@ Usage:
 """
 
 
-from diagnostics import install_error_hook, report_error, require_display
+from diagnostics import install_error_hook
 
 if __name__ == "__main__":
     install_error_hook()

@@ -13,7 +13,10 @@ Use this example to:
   - Inspect how small Cartesian offsets map to joint motion.
 """
 
-from diagnostics import install_error_hook, report_error, require_display
+from diagnostics import configuration_error, target_warning, failure
+
+
+from diagnostics import install_error_hook, report_error
 
 if __name__ == "__main__":
     install_error_hook()
@@ -68,10 +71,7 @@ def main():
             0.0, 0.0, 0.0,     # wrist joints
         ]
         if len(q_init_deg) != n_joints:
-            raise ValueError(
-                f"初始角度数量与模型关节数量不符，请修改 q_init_deg 或核对 URDF / q_init_deg length ({len(q_init_deg)}) does not match "
-                f"robot joint count ({n_joints})"
-            )
+            raise configuration_error("q_init_deg", len(q_init_deg), n_joints)
 
         wait_pos_tol_deg = 5.0
         wait_vel_tol_deg_s = 20.0
@@ -182,7 +182,7 @@ def main():
                 )
 
         else:
-            print("[IK] 警告：逆解达到迭代上限仍未收敛，请减小目标位姿偏移并核对模型及关节限位 / WARNING: Max outer iterations reached without convergence.")
+            report_error(failure("P12", "逆运动学未找到满足要求的解。", "Inverse kinematics did not converge.", "请减小目标位置或姿态的变化量后重试。", "Reduce the target position or orientation change and retry."), severity="warning")
 
         # 6) Final FK check
         T_final = kin.ee_in_base(q_head_iter, q_arm_iter)
@@ -211,7 +211,7 @@ def main():
         if dt is not None:
             print(f"[Exec] Reached final target in {dt:.2f} s.")
         else:
-            print("[Exec] 未到达最终目标（超时或无进展），请检查运动空间、目标/限位及头臂供电和舵机线 / Final target NOT reached (timeout or no progress).")
+            report_error(target_warning(), severity="warning")
 
         time.sleep(1.0)
         print("\n[Done] IK example finished.")

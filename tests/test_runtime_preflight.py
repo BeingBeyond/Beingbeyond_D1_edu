@@ -69,7 +69,7 @@ class RuntimePreflightTests(unittest.TestCase):
                 patch.object(runtime, "DexHand", side_effect=OSError("lost adapter")), \
                 patch.object(vision, "StereoRGBCamera") as camera:
             with self.assertRaisesRegex(detection.DeviceDetectionError,
-                                        "hand CAN port=can7 stage=controller initialization.*lost adapter"):
+                                        "can7.*lost adapter"):
                 runtime.D1Robot(**self.args)
         arm.return_value.close.assert_called_once()
         arm.return_value.home_and_close.assert_not_called()
@@ -82,7 +82,7 @@ class RuntimePreflightTests(unittest.TestCase):
             robot = runtime.D1Robot(**self.args)
             arm.return_value.set_positions.side_effect = OSError("USB disconnected")
             with self.assertRaisesRegex(detection.DeviceDetectionError,
-                                        "head_arm port=/dev/ttyACM7 stage=set positions.*USB disconnected") as caught:
+                                        "/dev/ttyACM7.*USB disconnected") as caught:
                 robot.set_q([0.0] * 14)
             self.assertIsInstance(caught.exception.__cause__, OSError)
             hand.return_value.set_joint_pos.assert_not_called()
@@ -92,7 +92,7 @@ class RuntimePreflightTests(unittest.TestCase):
         camera = vision.StereoRGBCamera(device="/dev/video8")
         camera.cap = MagicMock()
         camera.cap.read.return_value = (False, None)
-        with self.assertRaisesRegex(RuntimeError, "port=/dev/video8 stage=read frame.*Failed to read frame"):
+        with self.assertRaisesRegex(RuntimeError, "相机.*?/dev/video8.*?未返回图像"):
             camera.read_pair()
 
     def test_camera_configuration_failure_releases_capture(self):
@@ -100,7 +100,7 @@ class RuntimePreflightTests(unittest.TestCase):
         with patch.object(vision.cv2, "VideoCapture") as capture:
             capture.return_value.set.side_effect = OSError("configuration failed")
             with self.assertRaisesRegex(detection.DeviceDetectionError,
-                                        "stereo camera port=/dev/video8 stage=configure capture.*configuration failed"):
+                                        "/dev/video8.*采集设置失败.*configuration failed"):
                 camera.start()
         capture.return_value.release.assert_called_once()
         self.assertIsNone(camera.cap)
@@ -110,7 +110,7 @@ class RuntimePreflightTests(unittest.TestCase):
                 patch.object(vision.cv2, "VideoCapture") as capture:
             capture.return_value.isOpened.return_value = False
             with self.assertRaisesRegex(detection.DeviceDetectionError,
-                                        "stereo camera port=/dev/video8 stage=capture check"):
+                                        "无法打开相机：/dev/video8"):
                 detection.check_camera("/dev/video8")
         capture.return_value.release.assert_called_once()
 

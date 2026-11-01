@@ -11,6 +11,9 @@ DexHand during the game. Keep the physical emergency stop button within reach.
 Press q in the OpenCV camera window to exit.
 """
 
+from diagnostics import configuration_error, missing_joints_error, target_warning
+
+
 from diagnostics import install_error_hook, report_error, require_display
 
 if __name__ == "__main__":
@@ -211,10 +214,7 @@ def infer_finger_indices(joint_names) -> Dict[str, Tuple[int, ...]]:
 
     missing = [finger for finger, values in indices.items() if not values]
     if missing:
-        raise RuntimeError(
-            f"无法确定以下手指的关节索引，请核对重定向配置、URDF 和关节名 / Cannot infer finger qpos indices for {missing}. "
-            f"Retargeting joints are: {list(joint_names)}"
-        )
+        raise missing_joints_error(missing)
     return {finger: tuple(values) for finger, values in indices.items()}
 
 
@@ -413,7 +413,7 @@ def apply_thumbs_up_idle_posture(head_arm: HeadArmRobot, hand: DexHand, idle_cfg
     if elapsed is not None:
         print(f"Reached idle thumbs-up posture in {elapsed:.2f} s.")
     else:
-        print("点赞姿态未到达，请核对目标/限位、运动空间、头臂供电及舵机线 / Idle thumbs-up posture NOT reached (timeout or no progress).")
+        report_error(target_warning(), severity="warning")
 
 
 class IdleMotion:
@@ -504,7 +504,7 @@ class IdleMotion:
 def move_head_arm_to_initial_pose(head_arm: HeadArmRobot, cfg: HeadArmCfg) -> None:
     q_init_deg = list(cfg.q_init_deg)
     if len(q_init_deg) != 8:
-        raise ValueError("q_init_deg 必须包含 8 个头臂角度，请修改配置 / q_init_deg must contain 8 values")
+        raise configuration_error("q_init_deg", len(q_init_deg), 8)
 
     q_init_rad = deg_list_to_rad(q_init_deg)
     print(f"\n[Step] Move head + arm to initial pose (deg): {q_init_deg}")
@@ -696,7 +696,8 @@ def main() -> None:
                 )
                 with device_operation("display", "OpenCV", "visualization"):
                     cv2.imshow(window_name, overlay)
-                if cv2.waitKey(1) & 0xFF == ord("q"):
+                    key = cv2.waitKey(1) & 0xFF
+                if key == ord("q"):
                     break
 
                 frame_idx += 1

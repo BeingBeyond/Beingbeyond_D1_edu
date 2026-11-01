@@ -15,7 +15,10 @@ Keyboard in the Isaac Gym viewer:
 Close the Isaac Gym viewer or the slider panel to exit.
 """
 
-from diagnostics import install_error_hook, report_error, require_display
+from diagnostics import model_file_error, failure
+
+
+from diagnostics import install_error_hook
 
 if __name__ == "__main__":
     install_error_hook()
@@ -106,14 +109,14 @@ def create_sim(gym, cfg: SimCfg) -> gymapi.Sim:
 
     sim = gym.create_sim(cfg.compute_device_id, cfg.graphics_device_id, cfg.physics_engine, sim_params)
     if sim is None:
-        raise RuntimeError("无法创建仿真，请核对 Isaac Gym、GPU 驱动及计算设备编号 / Failed to create sim")
+        raise failure("P11", "无法创建 Isaac Gym 仿真。设备编号：{}。".format(cfg.compute_device_id), "Could not create the Isaac Gym simulation on device {}.".format(cfg.compute_device_id), "请检查 GPU 驱动和仿真设备编号。", "Check the GPU driver and simulation device ID.")
     return sim
 
 
 def create_viewer(gym, sim) -> gymapi.Viewer:
     viewer = gym.create_viewer(sim, gymapi.CameraProperties())
     if viewer is None:
-        raise RuntimeError("无法创建仿真窗口，请核对桌面显示会话和图形驱动 / Failed to create viewer")
+        raise failure("V11", "无法创建仿真窗口。", "Could not create the simulation window.", "请先在本机桌面终端重试。", "Try again from the local desktop terminal.")
     return viewer
 
 
@@ -125,7 +128,7 @@ def add_ground(gym, sim) -> None:
 
 def load_asset(gym, sim, cfg: AssetCfg):
     if not os.path.isfile(cfg.asset_path):
-        raise FileNotFoundError(f"URDF 文件不存在，请核对模型路径并确认 SDK 模型已安装 / URDF not found: {cfg.asset_path}")
+        raise model_file_error(cfg.asset_path)
 
     asset_root = os.path.dirname(cfg.asset_path)
     asset_file = os.path.basename(cfg.asset_path)

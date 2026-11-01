@@ -8,7 +8,7 @@ This directory provides the BeingBeyond D1 education-version SDK wheel,
 example Python scripts, and basic guidance for environment setup,
 hardware connections, and first-time troubleshooting.
 
-示例报错现提供中英文说明，包含设备角色、端口、失败阶段及相机线、遥操臂线、舵机 ID 等排查建议。
+示例报错以中英文分行显示，按具体故障提示检查设备或关节连接；相同错误不重复输出。
 详见 [双语报错与接线排查 / Bilingual troubleshooting](docs/TROUBLESHOOTING.md)。
 Examples now explain failures in Chinese and English, with device/port/stage context and connection checks.
 
@@ -124,10 +124,10 @@ numbers, insertion order, or a particular unit's USB serial number.
 
 | Device | Default |
 | --- | --- |
-| Head + arm controller | `auto`: USB `1a86:55d3`, then read and validate all 8 servo IDs at 1 Mbps |
+| Head + arm controller | `auto`: USB `1a86:55d3`, then read and validate all 8 joint communication IDs at 1 Mbps |
 | DexHand CAN interface | `auto`: enumerate the USB `0c72:000c` SocketCAN adapter |
 | USB stereo RGB camera | `auto`: select USB `15aa:1955`, video index 0 |
-| Arm exoskeleton | `auto`: USB `1a86:7523`, then validate position responses for configured servo IDs |
+| Arm exoskeleton | `auto`: USB `1a86:7523`, then validate position responses for configured joint communication IDs |
 | Glove | `auto`: USB `1a86:55d3`, then receive 3 consecutive valid six-channel `ANGLES:` frames |
 
 Head/arm and glove use the same USB model, so their roles are determined by
@@ -190,8 +190,8 @@ CAN communication and requested camera capture before controller initialization.
 They are useful for unsupported adapters or resolving ambiguity.
 `TeleopRealCfg.enable_camera=False` omits camera discovery and capture checks.
 Passive CAN/camera failures are reported together; serial probes are then skipped
-and listed as unchecked. Error messages retain the role, port and failure stage;
-servo error replies are distinguished from missing valid responses.
+and listed as unchecked. Messages identify the affected device and next check.
+D1_DEBUG=1 shows the full error context; joint faults are reported separately from missing replies.
 
 Run the discovery regression tests (no hardware access):
 
@@ -476,99 +476,18 @@ Useful tuning switches are near the top of `10_rock_paper_scissors_real.py`:
 
 ## 7. Troubleshooting
 
-### No `/dev/ttyACM*` or `/dev/ttyUSB*`
+See [Errors and checks / 报错与自检](docs/TROUBLESHOOTING.md) for each message's next step,
+including joint numbering and which cable to check when a chain stops responding.
 
-- Reconnect the USB cable.
-- Check `lsusb`.
-- Remove `brltty` if it is occupying a serial device:
-
-```bash
-sudo apt remove brltty
-```
-
-### Permission Denied on Serial Port
-
-Add your user to `dialout`:
+Normal errors show the problem and one check, without a repeated traceback.
+Use `D1_DEBUG=1` to include the full exception, for example:
 
 ```bash
-sudo usermod -aG dialout $USER
-newgrp dialout
+D1_DEBUG=1 python examples/device_detection.py --roles head_arm --check
 ```
 
-### DexHand or CAN Fails to Open
-
-Check the CAN interface:
-
-```bash
-ip -details link show can0
-```
-
-Bring it up manually:
-
-```bash
-sudo ip link set can0 down
-sudo ip link set can0 type can bitrate 1000000 restart-ms 100
-sudo ip link set can0 up
-```
-
-### Head + Arm Servo IDs Not Responding
-
-Check that the robot controller is connected to `/dev/ttyACM0`, or update
-the `dev` / `arm_dev` value in the example. Also check USB permissions and
-power.
-
-### RGB Camera Does Not Open
-
-Check the camera device:
-
-```bash
-ls /dev/video*
-ls -l /dev/v4l/by-id/
-v4l2-ctl --list-devices
-```
-
-To confirm the video source, check the existing `/dev/video*` devices first,
-then plug in the robot and compare which new `/dev/video*` device appears.
-Then check which stable by-id symlink points to that numeric node:
-
-```bash
-ls -l /dev/v4l/by-id/
-```
-
-The default camera path used by the examples is:
-
-```text
-/dev/v4l/by-id/usb-SunplusIT_Inc_SPCA2100_PC_Camera-video-index0
-```
-
-If the camera is not available at this path, update the matching camera
-configuration in the example you run:
-
-- `device` in `3_show_vision.py`
-- `vision_device` in examples that create `D1Robot`, such as
-  `4_control_d1.py`, `6_keyboard_teleop.py`, and `8_exo_teleop_real.py`
-- `StereoCfg.device` in `9_rock_paper_scissors_sim.py`
-- `StereoCfg.device` in `10_rock_paper_scissors_real.py`
-
-### Exoskeleton or Glove Does Not Open
-
-Check:
-
-```bash
-ls /dev/ttyUSB*
-ls /dev/ttyACM*
-```
-
-Then update:
-
-- `arm_exo_port` in `7_exo_teleop_sim.py` / `8_exo_teleop_real.py`
-- `glove_port` in `7_exo_teleop_sim.py` / `8_exo_teleop_real.py`
-
-### Hand Motion Looks Misaligned
-
-- Power cycle the robot and wait for DexHand calibration.
-- Keep fingers open and unobstructed during startup.
-- Verify the glove zero calibration posture before teleoperation.
+This check does not send motion commands. Opening serial ports can reset some controllers.
+Other examples retain their normal hardware actions when `D1_DEBUG=1` is set.
 
 ---
 

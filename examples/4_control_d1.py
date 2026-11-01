@@ -15,7 +15,7 @@ Use this example as a high-level integration demo to:
   - Inspect the robot behavior from the camera's point of view
   - Use as a starting point for teleoperation or task-level applications.
 """
-from diagnostics import install_error_hook, report_error, require_display
+from diagnostics import target_warning, install_error_hook, report_error
 
 if __name__ == "__main__":
     install_error_hook()
@@ -149,7 +149,7 @@ def main() -> int:
             if t2 is not None:
                 print(f"Reached third posture in {t2:.2f} s.")
             else:
-                print("第三姿态未到达，请核对目标/限位、运动空间、头臂供电及舵机线 / Third posture NOT reached (timeout or no progress).")
+                report_error(target_warning(), severity="warning")
 
             # 5) Configure a motion profile
             print("\nSetting custom motion profile ...")
@@ -175,7 +175,7 @@ def main() -> int:
             if t_home is not None:
                 print(f"Reached neutral posture in {t_home:.2f} s.")
             else:
-                print("中立姿态未到达，请核对目标/限位、运动空间、头臂供电及舵机线 / Neutral posture NOT reached (timeout or no progress).")
+                report_error(target_warning(), severity="warning")
             if interruptible_sleep(robot, 1.0):
                 return 0
 

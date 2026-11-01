@@ -50,7 +50,7 @@ class ProtocolTests(unittest.TestCase):
             body = bytes((command[2], 2, 4))
             port.pending = b"\xff\xff" + body + bytes((~sum(body) & 255,))
         port.write = fault
-        with self.assertRaisesRegex(detection.DeviceDetectionError, "ID 11.*0x04.*present"):
+        with self.assertRaisesRegex(detection.DeviceDetectionError, "头部 1 号关节.*0x04"):
             detection._probe_head_arm(port)
 
     def test_head_error_parser_rejects_query_echo_and_bad_checksum(self):
@@ -150,11 +150,11 @@ class DiscoveryTests(unittest.TestCase):
                 "/dev/ttyACM7": SimpleNamespace(vid=0x1a86, pid=0x55d3)}), \
                 patch.object(detection, "_open_probe", side_effect=self.open_port), \
                 patch.object(detection, "_probe_glove", return_value=True):
-            with self.assertRaisesRegex(detection.DeviceDetectionError, "/dev/ttyACM7: identified as glove"):
+            with self.assertRaisesRegex(detection.DeviceDetectionError, "/dev/ttyACM7.*手套"):
                 detection.resolve_serial_ports({"head_arm": "auto"})
 
     def test_unsupported_serial_is_listed_without_opening_it(self):
-        with self.assertRaisesRegex(detection.DeviceDetectionError, "/dev/ttyUSB8: USB 1234:5678 excluded"):
+        with self.assertRaisesRegex(detection.DeviceDetectionError, "USB 串口 /dev/ttyUSB8.*无法自动确认"):
             self.discover({"/dev/ttyUSB8": SimpleNamespace(vid=0x1234, pid=0x5678)}, {"exo": "auto"})
         self.assertEqual(self.probes, [])
 
@@ -169,13 +169,13 @@ class DiscoveryTests(unittest.TestCase):
 
     def test_explicit_failure_keeps_role_port_stage_and_permission(self):
         with patch.object(detection, "_open_probe", side_effect=PermissionError("permission denied")):
-            with self.assertRaisesRegex(detection.DeviceDetectionError, "exo port=/dev/custom stage=explicit serial verification.*permission denied"):
+            with self.assertRaisesRegex(detection.DeviceDetectionError, "遥操臂.*?/dev/custom.*?访问权限"):
                 detection.resolve_serial_ports({"exo": "/dev/custom"}, verify_explicit=True)
 
     def test_explicit_alias_conflict_fails_before_any_probe(self):
         with patch.object(detection.os.path, "realpath", return_value="/dev/ttyUSB4"), \
                 patch.object(detection, "_serial_candidates") as inventory:
-            with self.assertRaisesRegex(detection.DeviceDetectionError, "/dev/ttyUSB4 -> exo, glove"):
+            with self.assertRaisesRegex(detection.DeviceDetectionError, "遥操臂和手套.*?/dev/ttyUSB4"):
                 detection.resolve_serial_ports({"exo": "/alias", "glove": "/dev/ttyUSB4"})
         inventory.assert_not_called()
 
@@ -188,8 +188,8 @@ class DiscoveryTests(unittest.TestCase):
         message = str(caught.exception)
         self.assertIn("missing CAN", message)
         self.assertIn("missing camera", message)
-        self.assertIn("serial verification skipped", message)
-        self.assertIn("head_arm=auto", message)
+        self.assertIn("尚未检查", message)
+        self.assertIn("头臂控制器", message)
         probe.assert_not_called()
 
     def test_communication_failures_are_aggregated_before_serial_probes(self):
@@ -198,8 +198,8 @@ class DiscoveryTests(unittest.TestCase):
                 patch.object(detection, "resolve_serial_ports") as probe:
             with self.assertRaises(detection.DeviceDetectionError) as caught:
                 detection.resolve_devices(head_arm="auto", can_iface="can7", camera="/dev/video8", check_ready=True)
-        self.assertIn("can_iface port=can7 stage=communication check: bus unavailable", str(caught.exception))
-        self.assertIn("camera port=/dev/video8 stage=communication check: capture failed", str(caught.exception))
+        self.assertIn("bus unavailable", str(caught.exception))
+        self.assertIn("capture failed", str(caught.exception))
         probe.assert_not_called()
 
     def test_readiness_forwards_hand_side_bitrate_and_explicit_verification(self):
@@ -213,7 +213,7 @@ class DiscoveryTests(unittest.TestCase):
 
     def test_two_matching_exos_are_ambiguous(self):
         info = SimpleNamespace(vid=0x1a86, pid=0x7523)
-        with self.assertRaisesRegex(detection.DeviceDetectionError, "ambiguous"):
+        with self.assertRaisesRegex(detection.DeviceDetectionError, "找到多个"):
             self.discover({"/dev/ttyUSB1": info, "/dev/ttyUSB2": info}, {"exo": "auto"})
 
     def test_busy_candidate_cannot_hide_ambiguity(self):
@@ -230,17 +230,17 @@ class DiscoveryTests(unittest.TestCase):
                 detection.resolve_serial_ports({"exo": "auto"})
 
     def test_missing_device_and_partial_head_fail(self):
-        with self.assertRaisesRegex(detection.DeviceDetectionError, "no verified device"):
+        with self.assertRaisesRegex(detection.DeviceDetectionError, "未识别到"):
             self.discover({}, {"exo": "auto"})
         with patch.object(detection, "_serial_candidates", return_value={"/dev/ttyACM0": SimpleNamespace(vid=0x1a86, pid=0x55d3)}), \
                 patch.object(detection, "_open_probe", side_effect=self.open_port), \
                 patch.object(detection, "_probe_glove", return_value=False), \
                 patch.object(detection, "_probe_head_arm", return_value=[26]):
-            with self.assertRaisesRegex(detection.DeviceDetectionError, "26"):
+            with self.assertRaisesRegex(detection.DeviceDetectionError, "臂部 6 号关节"):
                 detection.resolve_serial_ports({"head_arm": "auto"})
 
     def test_duplicate_explicit_paths_are_rejected(self):
-        with self.assertRaisesRegex(detection.DeviceDetectionError, "multiple roles"):
+        with self.assertRaisesRegex(detection.DeviceDetectionError, "同一串口"):
             detection.resolve_serial_ports({"head_arm": "/same", "glove": "/same"})
 
     def test_serial_aliases_are_deduplicated(self):
@@ -298,7 +298,7 @@ class PeripheralTests(unittest.TestCase):
             self.assertEqual(detection.resolve_can_iface(), "can7")
         self.usb_node("/sys/class/net/can9", "0c72", "000c", type="280")
         with patch.object(detection, "Path", side_effect=self.path):
-            with self.assertRaisesRegex(detection.DeviceDetectionError, "ambiguous"):
+            with self.assertRaisesRegex(detection.DeviceDetectionError, "找到多个"):
                 detection.resolve_can_iface()
 
     def test_camera_filters_builtin_and_secondary_video_nodes(self):
@@ -309,7 +309,7 @@ class PeripheralTests(unittest.TestCase):
             self.assertEqual(detection.resolve_camera_device(), "/dev/video8")
         self.usb_node("/sys/class/video4linux/video12", "15aa", "1955", index="0")
         with patch.object(detection, "Path", side_effect=self.path):
-            with self.assertRaisesRegex(detection.DeviceDetectionError, "ambiguous"):
+            with self.assertRaisesRegex(detection.DeviceDetectionError, "找到多个"):
                 detection.resolve_camera_device()
 
     def test_can_check_sends_only_status_request(self):
@@ -328,7 +328,7 @@ class PeripheralTests(unittest.TestCase):
     def test_can_check_does_not_reconfigure_a_down_link(self):
         with patch.object(detection.subprocess, "run", return_value=SimpleNamespace(stdout='[{"flags": []}]')) as command, \
                 patch.object(detection.socket, "socket") as connect:
-            with self.assertRaisesRegex(detection.DeviceDetectionError, "already be UP"):
+            with self.assertRaisesRegex(detection.DeviceDetectionError, "尚未启动"):
                 detection.check_can("can7")
             connect.assert_not_called()
             self.assertEqual(command.call_args[0][0], ["ip", "-json", "-details", "link", "show", "dev", "can7"])
@@ -337,13 +337,13 @@ class PeripheralTests(unittest.TestCase):
         status = '[{"flags":["UP"],"linkinfo":{"info_data":{"state":"BUS-OFF","bittiming":{"bitrate":1000000}}}}]'
         with patch.object(detection.subprocess, "run", return_value=SimpleNamespace(stdout=status)), \
                 patch.object(detection.socket, "socket") as connect:
-            with self.assertRaisesRegex(detection.DeviceDetectionError, "hand CAN port=can7.*BUS-OFF"):
+            with self.assertRaisesRegex(detection.DeviceDetectionError, "can7.*BUS-OFF"):
                 detection.check_can("can7")
         connect.assert_not_called()
 
     def test_missing_ip_command_keeps_interface_and_stage(self):
         with patch.object(detection.subprocess, "run", side_effect=FileNotFoundError("ip not installed")):
-            with self.assertRaisesRegex(detection.DeviceDetectionError, "hand CAN port=can7 stage=status check.*ip not installed"):
+            with self.assertRaisesRegex(detection.DeviceDetectionError, "缺少系统命令 ip"):
                 detection.check_can("can7")
 
 

@@ -1,3 +1,5 @@
+from diagnostics import configuration_error
+
 from diagnostics import install_error_hook, report_error, require_display, warn_exo_readings
 
 if __name__ == "__main__":
@@ -198,7 +200,7 @@ def validate_cfg(cfg: TeleopRealCfg) -> None:
         ("hand_speed", cfg.hand_speed, 6),
     ):
         if len(values) != n:
-            raise ValueError(f"配置项数值数量错误，请修改对应列表 / {name} must contain {n} values")
+            raise configuration_error(name, len(values), n)
 
 
 class TeleopReal:
@@ -281,7 +283,7 @@ class TeleopReal:
         with device_operation('exo', self.cfg.arm_exo_port, 'read_frame'):
             frame = self.arm_exo.read_frame()
         valid = [read.ok and read.angle_deg is not None for read in frame.reads]
-        warn_exo_readings(valid, self.cfg.arm_exo_servo_ids, self.cfg.arm_exo_port)
+        warn_exo_readings(valid, self.cfg.arm_exo_servo_ids, self.cfg.arm_exo_port, self.cfg.arm_min_valid)
         if sum(valid) < self.cfg.arm_min_valid:
             return self.teleop[2:8].copy()
 
@@ -337,7 +339,7 @@ class TeleopReal:
             self.close(home=False)
             raise
 
-        print("[Info] Arm exo ids:", format_servo_ids(self.cfg.arm_exo_servo_ids))
+        print("遥操臂关节通信 ID / Exoskeleton joint IDs:", format_servo_ids(self.cfg.arm_exo_servo_ids))
         print("Start real teleop. Ctrl+C or q in the visualization window to exit.")
 
         dt = 1.0 / self.cfg.loop_hz
@@ -373,13 +375,13 @@ class TeleopReal:
                         combined_view = build_combined_view(camera, self.robot.hand, visual_fps, self.cfg.robot_hand_can)
                         with device_operation("display", "OpenCV", "visualization"):
                             cv2.imshow("D1 teleop camera + tactile", combined_view)
-                        if cv2.waitKey(1) & 0xFF == ord("q"):
+                            key = cv2.waitKey(1) & 0xFF
+                        if key == ord("q"):
                             print("\nInterrupted by user (q).")
                             break
                     except Exception as exc:
-                        print("[Visualization] 可视化已因错误关闭，遥操作继续运行 / Visualization disabled after error; teleoperation continues.")
                         report_error(exc)
-                        traceback.print_exc()
+                        print("画面显示已关闭，遥操作仍在运行。\nVisualization is disabled; teleoperation is still running.")
                         try:
                             camera.stop()
                         except Exception:
@@ -403,7 +405,6 @@ class TeleopReal:
         except Exception as exc:
             failed = True
             report_error(exc)
-            traceback.print_exc()
             raise
         finally:
             try:
